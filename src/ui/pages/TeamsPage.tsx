@@ -3,12 +3,15 @@ import { TEAM_BUFFS } from '../../data/teamBuffs.ts';
 import { teamSonataCoverage } from '../../domain/teams.ts';
 import { useInventoryStore } from '../../state/inventory.ts';
 import { useSnapshotStore } from '../../state/snapshotStore.ts';
+import { useLibraryStore } from '../../state/library.ts';
 import { useTeamStore } from '../../state/teamStore.ts';
 import { GameIcon } from '../components/GameIcon.tsx';
 import { statLabel, toDisplayValue } from '../format.ts';
 import { btnDangerGhost, btnPrimary, inputClass, labelClass } from '../components/classes.ts';
 import { Skeleton, ToastStack } from '../components/feedback.tsx';
-import { useToasts } from '../toasts.ts';
+import { UNDO_TOAST_MS, useToasts } from '../toasts.ts';
+import { Collapsible } from '../components/Collapsible.tsx';
+import { TeamAllocation } from '../components/TeamAllocation.tsx';
 import { SuggestInput } from '../components/SuggestInput.tsx';
 import { Alert, AttributeDot, EmptyState, PageHeader, Window } from '../components/ui.tsx';
 
@@ -18,6 +21,7 @@ export function TeamsPage() {
   const load = useTeamStore((s) => s.load);
   const createTeam = useTeamStore((s) => s.createTeam);
   const removeTeam = useTeamStore((s) => s.removeTeam);
+  const removeBuilds = useLibraryStore((s) => s.removeBuilds);
   const echoes = useInventoryStore((s) => s.echoes);
   const inventoryLoaded = useInventoryStore((s) => s.loaded);
   const loadInventory = useInventoryStore((s) => s.load);
@@ -27,7 +31,7 @@ export function TeamsPage() {
   const [name, setName] = useState('');
   const [members, setMembers] = useState(['', '', '']);
   const [error, setError] = useState<string | null>(null);
-  const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
+  const { toasts, push: pushToast, dismiss: dismissToast, hold: holdToast } = useToasts();
 
   useEffect(() => {
     if (!loaded) void load();
@@ -43,6 +47,23 @@ export function TeamsPage() {
     snapshot.characters.find((c) => c.id === id)?.name ?? id;
   const sonataNameOf = (id: string): string =>
     snapshot.sonataSets.find((s) => s.id === id)?.name ?? id;
+
+  /** Toast with an Undo that deletes exactly the builds just saved (in memory only). */
+  const offerUndoSave = (teamName: string, rows: readonly { id: string }[]): void => {
+    const ids = rows.map((r) => r.id);
+    const toastId = pushToast(`Saved ${rows.length} ${rows.length === 1 ? 'build' : 'builds'} for “${teamName}”.`, 'success', {
+      timeoutMs: UNDO_TOAST_MS,
+      action: {
+        label: 'Undo',
+        onAction: () => {
+          dismissToast(toastId);
+          removeBuilds(ids)
+            .then((removed) => pushToast(`Removed ${removed.length} saved ${removed.length === 1 ? 'build' : 'builds'}.`))
+            .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Undo failed.'));
+        },
+      },
+    });
+  };
 
   const handleCreate = async (): Promise<void> => {
     setError(null);
@@ -191,6 +212,15 @@ export function TeamsPage() {
                       );
                     })}
                   </div>
+                  <div className="mt-4">
+                    <Collapsible title="Allocate Echoes across this team">
+                      <TeamAllocation
+                        key={`${team.id}:${team.characterIds.join(',')}`}
+                        team={team}
+                        onSaved={(rows) => offerUndoSave(team.name, rows)}
+                      />
+                    </Collapsible>
+                  </div>
                   {coverage.combined.length > 0 && (
                     <p className="mt-3 text-xs text-fog tnum">
                       Team totals:{' '}
@@ -203,7 +233,7 @@ export function TeamsPage() {
           </ul>
         )}
       </div>
-      <ToastStack toasts={toasts} onDismiss={dismissToast} />
+      <ToastStack toasts={toasts} onDismiss={dismissToast} onHold={holdToast} />
     </section>
   );
 }

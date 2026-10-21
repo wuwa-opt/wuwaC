@@ -10,6 +10,16 @@ interface LibraryState {
   loaded: boolean;
   load: () => Promise<void>;
   saveBuild: (draft: BuildDraft) => Promise<Build>;
+  /**
+   * Save several builds atomically: every draft is validated first, then all
+   * rows are added in one Dexie transaction (all or nothing).
+   */
+  saveBuilds: (drafts: readonly BuildDraft[]) => Promise<Build[]>;
+  /**
+   * Delete builds by id in one transaction; resolves to the rows removed
+   * (unknown ids ignored). Used to undo `saveBuilds`.
+   */
+  removeBuilds: (ids: readonly string[]) => Promise<Build[]>;
   updateBuild: (id: string, patch: Partial<Pick<Build, 'name' | 'notes'>>) => Promise<Build>;
   removeBuild: (id: string) => Promise<void>;
   importBuilds: (json: unknown) => Promise<{ added: number; skipped: number }>;
@@ -38,6 +48,28 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
     await db.builds.add(row);
     set((s) => ({ builds: [...s.builds, row] }));
     return row;
+  },
+
+  saveBuilds: async (drafts) => {
+    const updatedAt = new Date().toISOString();
+    const rows = drafts.map((draft) => buildSchema.parse({ ...draft, id: crypto.randomUUID(), updatedAt }));
+    await db.transaction('rw', db.builds, async () => {
+      await db.builds.bulkAdd(rows);
+    });
+    set((s) => ({ builds: [...s.builds, ...rows] }));
+    return rows;
+  },
+
+  removeBuilds: async (ids) => {
+    const wanted = [...new Set(ids)];
+    const removed = await db.transaction('rw', db.builds, async () => {
+      const found = (await db.builds.bulkGet(wanted)).filter((row): row is Build => row !== undefined);
+      await db.builds.bulkDelete(found.map((row) => row.id));
+      return found;
+    });
+    const gone = new Set(removed.map((row) => row.id));
+    set((s) => ({ builds: s.builds.filter((b) => !gone.has(b.id)) }));
+    return removed;
   },
 
   updateBuild: async (id, patch) => {

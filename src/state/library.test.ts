@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from './db.ts';
 import { serializeBuilds, useLibraryStore } from './library.ts';
 import type { Build, SharedBuild } from '../data/schema.ts';
@@ -194,5 +194,53 @@ describe('reference builds (saved share links)', () => {
     };
     expect(BACKUP_VERSION).toBe(1);
     expect(parseBackup(backup).tables.builds[0].reference).toEqual(payload);
+  });
+});
+
+describe('library store: saveBuilds / removeBuilds', () => {
+  const draft = (name: string): Omit<Build, 'id' | 'updatedAt'> => ({
+    name,
+    characterId: 'jiyan',
+    weaponId: 'verdant-summit',
+    echoIds: [`${name}1`, `${name}2`, `${name}3`, `${name}4`, `${name}5`],
+    objectiveId: 'Max ATK',
+    objective: { kind: 'max-stat', stat: 'atk' },
+  });
+
+  it('saves every draft in one transaction with fresh ids', async () => {
+    const rows = await useLibraryStore.getState().saveBuilds([draft('A'), draft('B')]);
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((r) => r.id)).size).toBe(2);
+    expect(await db.builds.count()).toBe(2);
+    expect(useLibraryStore.getState().builds).toEqual(rows);
+  });
+
+  it('writes nothing when one draft is invalid', async () => {
+    const bad = { ...draft('Bad'), echoIds: ['x', 'x', 'y', 'z', 'w'] } as Omit<Build, 'id' | 'updatedAt'>;
+    await expect(useLibraryStore.getState().saveBuilds([draft('A'), bad])).rejects.toThrow();
+    expect(await db.builds.count()).toBe(0);
+    expect(useLibraryStore.getState().builds).toEqual([]);
+  });
+
+  it('rolls back and leaves state untouched when the transaction fails part-way', async () => {
+    const original = db.builds.bulkAdd.bind(db.builds);
+    const spy = vi.spyOn(db.builds, 'bulkAdd').mockImplementation((async (items: unknown[]) => {
+      await original([items[0]] as never);
+      throw new Error('quota exceeded');
+    }) as never);
+    await expect(useLibraryStore.getState().saveBuilds([draft('A'), draft('B')])).rejects.toThrow('quota exceeded');
+    spy.mockRestore();
+    expect(await db.builds.count()).toBe(0);
+    expect(useLibraryStore.getState().builds).toEqual([]);
+  });
+
+  it('removeBuilds returns the rows removed, ignores unknown ids, and undoes a save', async () => {
+    const saved = await useLibraryStore.getState().saveBuilds([draft('A'), draft('B')]);
+    const keep = await useLibraryStore.getState().saveBuild(draft('Keep'));
+    const removed = await useLibraryStore.getState().removeBuilds([...saved.map((r) => r.id), 'nope']);
+    expect(removed).toEqual(saved);
+    expect((await db.builds.toArray()).map((b) => b.id)).toEqual([keep.id]);
+    expect(useLibraryStore.getState().builds.map((b) => b.id)).toEqual([keep.id]);
+    expect(await useLibraryStore.getState().removeBuilds(saved.map((r) => r.id))).toEqual([]);
   });
 });

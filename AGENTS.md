@@ -403,6 +403,28 @@ interface Team {
   - Undo lives in memory only. It is dropped when `load()` bumps
     `generation` (a backup restore), when the toast goes, and when the
     page unmounts.
+- **Team allocation** (Teams page, `ui/components/TeamAllocation.tsx`;
+  optimizer side `optimizer/allocate.ts` + `allocateMembers.ts`). It is
+  greedy, not a joint optimum, and the UI must keep saying so.
+  - **Search:** members search in a user-ordered priority with the
+    existing exact search (`runOptimization`, injectable `run`). Each
+    searches the inventory minus the Echoes earlier members took.
+  - **Pool:** it ignores `equippedTo`, keeps locked Echoes and honours a
+    minimum level. Budget 12, no Sonata lock, top 1.
+  - **Inputs:** the objective and context come from a saved build
+    (`Build.objective`, `Build.context`, else the Roster entry on the same
+    weapon). The enemy is the Calculator's session-only setting. Resonance
+    Mode characters are blocked.
+  - **Baseline:** the same search over exactly the five `equippedTo`
+    Echoes (best slot-1 order).
+  - **Cancel:** `handle.cancel()` never settles its promise, so
+    `runAllocation` races it against an `AbortSignal`.
+  - **Stale preview:** Save is disabled when `planKey` changes: every Echo
+    field except `locked`/`origin`, each member's objective, context,
+    weapon and enemy, the minimum level, and `dataStamp` (snapshot version
+    and `fetchedAt`).
+  - **Save:** "Save as builds" is `saveBuilds` (one transaction) with an
+    Undo (`removeBuilds`). Allocation never writes `equippedTo`.
 - UI dynamics: live-feedback primitives in `src/ui/components/feedback.tsx` +
   `src/ui/toasts.ts`, motion hooks in `src/ui/motion.ts` (`useAnimatedNumber`,
   `useReveal` for scroll-in Windows, `useTypewriter` for the mascot bubble), command palette in

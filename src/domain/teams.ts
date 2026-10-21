@@ -77,3 +77,22 @@ export function teamSonataCoverage(
     })),
   };
 }
+
+/** True when `order` holds exactly the team's three members, each once. */
+export function isTeamPermutation(order: readonly string[] | undefined, characterIds: readonly string[]): boolean {
+  return (
+    order !== undefined &&
+    order.length === characterIds.length &&
+    new Set(order).size === order.length &&
+    order.every((id) => characterIds.includes(id))
+  );
+}
+
+/**
+ * Team allocation priority: the saved `team.priority` when it is a
+ * permutation of the members, else team order. Anything else is ignored.
+ */
+export function teamPriority(team: Pick<Team, 'characterIds' | 'priority'>): [string, string, string] {
+  const order = isTeamPermutation(team.priority, team.characterIds) ? team.priority! : team.characterIds;
+  return [order[0], order[1], order[2]];
+}

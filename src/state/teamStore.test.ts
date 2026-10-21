@@ -56,4 +56,26 @@ describe('team store', () => {
     expect(await db.teams.count()).toBe(0);
     await expect(useTeamStore.getState().removeTeam(team.id)).rejects.toThrow(/unknown team/);
   });
+
+  it('setPriority saves a permutation in one write and rejects anything else', async () => {
+    const team = await useTeamStore.getState().createTeam('Main', ['jiyan', 'verina', 'rover']);
+    await useTeamStore.getState().setPriority(team.id, ['rover', 'jiyan', 'verina']);
+    expect((await db.teams.get(team.id))?.priority).toEqual(['rover', 'jiyan', 'verina']);
+    expect(useTeamStore.getState().teams[0].priority).toEqual(['rover', 'jiyan', 'verina']);
+    await expect(useTeamStore.getState().setPriority(team.id, ['rover', 'rover', 'verina'])).rejects.toThrow(/order of the team/);
+    await expect(useTeamStore.getState().setPriority(team.id, ['rover', 'jiyan', 'yangyang'])).rejects.toThrow(/order of the team/);
+    await expect(useTeamStore.getState().setPriority('nope', ['rover', 'jiyan', 'verina'])).rejects.toThrow(/unknown team/);
+    expect((await db.teams.get(team.id))?.priority).toEqual(['rover', 'jiyan', 'verina']);
+  });
+
+  it('setMembers keeps a priority that still matches and drops one that does not', async () => {
+    const team = await useTeamStore.getState().createTeam('Main', ['jiyan', 'verina', 'rover']);
+    await useTeamStore.getState().setPriority(team.id, ['rover', 'jiyan', 'verina']);
+    await useTeamStore.getState().setMembers(team.id, ['verina', 'rover', 'jiyan']);
+    expect((await db.teams.get(team.id))?.priority).toEqual(['rover', 'jiyan', 'verina']);
+    await useTeamStore.getState().setMembers(team.id, ['verina', 'rover', 'yangyang']);
+    const row = await db.teams.get(team.id);
+    expect(row).not.toHaveProperty('priority');
+    expect(useTeamStore.getState().teams[0]).not.toHaveProperty('priority');
+  });
 });

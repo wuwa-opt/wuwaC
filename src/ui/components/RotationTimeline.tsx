@@ -17,7 +17,7 @@ import { JIYAN_OUTRO_LANCE_MV } from '../../domain/jiyan.ts';
 import { maxStatusStacks, negativeStatusDef } from '../../domain/negativeStatus.ts';
 import type { ActionBlock, BlockResult, RotationBuff } from '../../domain/rotation.ts';
 import { blockStartTimes, buffAppliesAt, isBlockStale } from '../../domain/rotation.ts';
-import { isPercentStat, parseDisplayValue, statLabel, toDisplayValue } from '../format.ts';
+import { isPercentStat, parseDisplayValue, RESONANCE_MODE_LABELS, statLabel, toDisplayValue } from '../format.ts';
 import { btnDangerGhost, btnGhost, btnOutline, btnSm, inputClass, labelClass } from './classes.ts';
 import { Window } from './ui.tsx';
 import { AnimatedNumber, DeltaChip, ScoreBar } from './feedback.tsx';
@@ -203,11 +203,6 @@ export function RotationTimeline(props: RotationTimelineProps) {
   const strainCharacter = characterUsesTuneStrain(character.id);
   const ruptureResponses = characterTuneRuptureResponses(character.id);
   const resonanceModes = characterResonanceModes(character.id);
-  const RESONANCE_MODE_LABELS: Record<ResonanceMode, string> = {
-    tuneRupture: 'Tune Rupture',
-    fusionBurst: 'Fusion Burst',
-    tuneStrain: 'Tune Strain',
-  };
   // Previous scores for the delta chips, carried as render state: when
   // the scores move, this render compares against the last committed
   // pair (adjust-state pattern — React re-renders before painting).

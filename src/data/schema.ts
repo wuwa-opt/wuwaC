@@ -686,6 +686,27 @@ export const buildSchema = z
      * saved before it existed simply lack it.
      */
     context: rosterEntrySchema.optional(),
+    /**
+     * Enemy settings the optimizer run used (the Calculator's kind, level and
+     * base RES), saved with the build so team allocation re-runs against the
+     * same target. Bounds mirror `domain/enemy.ts` (`MAX_ENEMY_LEVEL`,
+     * `MAX_ENEMY_RES`; a schema test keeps them in step). Optional and
+     * unindexed: no Dexie bump; older builds fall back to the Calculator.
+     */
+    enemy: z
+      .object({
+        kind: z.enum(['mob', 'boss']),
+        level: z.number().int().min(1).max(120),
+        baseRES: z.number().min(0).max(0.8),
+      })
+      .optional(),
+    /**
+     * Resonance Mode the run scored a dual-mode kit in (`characterResonanceModes`).
+     * A plain string here: the data layer doesn't own the mode list, and a
+     * mode this app doesn't know must not fail a backup restore. Consumers
+     * check it against the character's modes and ignore anything else.
+     */
+    resonanceMode: z.string().min(1).max(40).optional(),
     updatedAt: z.string().datetime({ offset: true }),
   })
   .refine((b) => new Set(b.echoIds).size === b.echoIds.length, {
@@ -706,6 +727,17 @@ export const teamSchema = z
       z.string().min(1),
       z.string().min(1),
     ]),
+    /**
+     * Team allocation priority (index 0 picks first), saved on each reorder.
+     * Only a permutation of `characterIds` counts (`teamPriority` in
+     * `domain/teams.ts`); a malformed value parses as absent instead of
+     * failing a backup restore. The table is keyed by `'id'` only, so no
+     * Dexie bump.
+     */
+    priority: z
+      .tuple([z.string().min(1), z.string().min(1), z.string().min(1)])
+      .optional()
+      .catch(undefined),
     /** Display-only in v1; drives rotation modeling in v2 (reference §5). */
     outroBuffs: z
       .array(

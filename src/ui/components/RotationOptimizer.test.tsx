@@ -4,7 +4,9 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadBundledSnapshot } from '../../data/index.ts';
 import type { OwnedEcho, RosterEntry } from '../../data/schema.ts';
+import type { ResonanceMode } from '../../domain/characterMods.ts';
 import { standardMob } from '../../domain/damage.ts';
+import type { EnemySettings } from '../../optimizer/allocateMembers.ts';
 import { emptySheet } from '../../domain/stats.ts';
 import type { SearchData, SearchResult } from '../../optimizer/search.ts';
 import { runOptimization, type OptimizationHandle } from '../../optimizer/worker.ts';
@@ -63,7 +65,10 @@ function fakeHandle() {
   return { handle, resolve: (r: SearchResult) => resolve(r), progress: (e: number, t: number) => progress?.(e, t) };
 }
 
-function renderOptimizer(context: RosterEntry = roster) {
+function renderOptimizer(
+  context: RosterEntry = roster,
+  over: { enemySettings?: EnemySettings; resonanceMode?: ResonanceMode } = {},
+) {
   return render(
     <RotationOptimizer
       character={jiyan}
@@ -72,6 +77,8 @@ function renderOptimizer(context: RosterEntry = roster) {
       echoes={echoes}
       sonataSets={snapshot.sonataSets}
       enemy={standardMob(90)}
+      enemySettings={over.enemySettings ?? { kind: 'mob', level: 90, baseRES: 0.1 }}
+      resonanceMode={over.resonanceMode}
       blocks={[{ skillId: liberation.id, motionName: liberation.motionValues[0].name, forteLevel: 10, activeBuffIds: [] }]}
       buffs={[]}
       globalBuffIds={[]}
@@ -193,5 +200,80 @@ describe('RotationOptimizer save', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].context).toEqual(draft);
     expect(rows[0].echoIds).toEqual(['e', 'a', 'b', 'f', 'g']);
+  });
+
+  it('saves the enemy and Resonance Mode the run used, not later Calculator edits', async () => {
+    await db.builds.clear();
+    useLibraryStore.setState({ builds: [], loaded: true });
+    const user = userEvent.setup();
+    const fake = fakeHandle();
+    run.mockReturnValue(fake.handle);
+    const view = renderOptimizer(roster, { enemySettings: { kind: 'boss', level: 100, baseRES: 0.2 }, resonanceMode: 'tuneStrain' });
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    expect((run.mock.calls[0][0] as SearchData).resonanceMode).toBe('tuneStrain');
+    await act(async () => {
+      fake.resolve({
+        builds: [{ echoIds: ['a', 'b', 'e', 'f', 'g'], score: 1000, sheet: emptySheet(), warnings: [], appliedAssumptions: [], mainEchoId: 'e' }],
+        evaluated: 1,
+        scored: 1,
+        total: 1,
+        prunedEchoes: [],
+      });
+      await fake.handle.promise;
+    });
+    // The user moves the Calculator's enemy after the run; the build keeps the run's.
+    view.rerender(
+      <RotationOptimizer
+        character={jiyan}
+        weapon={verdant}
+        roster={roster}
+        echoes={echoes}
+        sonataSets={snapshot.sonataSets}
+        enemy={standardMob(90)}
+        enemySettings={{ kind: 'mob', level: 50, baseRES: 0 }}
+        resonanceMode="tuneStrain"
+        blocks={[{ skillId: liberation.id, motionName: liberation.motionValues[0].name, forteLevel: 10, activeBuffIds: [] }]}
+        buffs={[]}
+        globalBuffIds={[]}
+        crit="expected"
+        currentDpr={null}
+        rotationTime={10}
+        onApply={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await user.type(screen.getByRole('textbox', { name: /build name/i }), 'Boss run');
+    await user.click(screen.getByRole('button', { name: /confirm save/i }));
+
+    const [row] = await db.builds.toArray();
+    expect(row.enemy).toEqual({ kind: 'boss', level: 100, baseRES: 0.2 });
+    expect(row.resonanceMode).toBe('tuneStrain');
+  });
+
+  it('saves no Resonance Mode for a single-mode run', async () => {
+    await db.builds.clear();
+    useLibraryStore.setState({ builds: [], loaded: true });
+    const user = userEvent.setup();
+    const fake = fakeHandle();
+    run.mockReturnValue(fake.handle);
+    renderOptimizer();
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    await act(async () => {
+      fake.resolve({
+        builds: [{ echoIds: ['a', 'b', 'e', 'f', 'g'], score: 1000, sheet: emptySheet(), warnings: [], appliedAssumptions: [] }],
+        evaluated: 1,
+        scored: 1,
+        total: 1,
+        prunedEchoes: [],
+      });
+      await fake.handle.promise;
+    });
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await user.type(screen.getByRole('textbox', { name: /build name/i }), 'Plain');
+    await user.click(screen.getByRole('button', { name: /confirm save/i }));
+
+    const [row] = await db.builds.toArray();
+    expect(row.enemy).toEqual({ kind: 'mob', level: 90, baseRES: 0.1 });
+    expect(row).not.toHaveProperty('resonanceMode');
   });
 });

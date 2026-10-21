@@ -183,4 +183,52 @@ describe('backup', () => {
       expect(await db.builds.get('build-ctx')).toEqual(withContext);
     });
   });
+
+  describe('run settings on builds and priority on teams (optional fields, backup stays v1)', () => {
+    const withSettings: Build = {
+      ...build,
+      id: 'build-settings',
+      characterId: 'denia',
+      enemy: { kind: 'boss', level: 100, baseRES: 0.2 },
+      resonanceMode: 'tuneStrain',
+    };
+    const ordered: Team = { ...team, id: 'team-ordered', priority: ['rover', 'jiyan', 'verina'] };
+
+    it('a v1 backup from before them still parses and restores unchanged', async () => {
+      const legacy = {
+        format: BACKUP_FORMAT,
+        version: 1,
+        exportedAt: '2026-10-01T00:00:00.000Z',
+        tables: { ownedEchoes: [], roster: [entry], builds: [build], teams: [team] },
+      };
+      const parsed = parseBackup(legacy);
+      expect(parsed.tables.builds[0]).toStrictEqual(build);
+      expect(parsed.tables.teams[0]).toStrictEqual(team);
+      await restoreBackup(parsed, 'replace');
+      expect(await db.builds.get('build-1')).toStrictEqual(build);
+      expect(await db.teams.get('team-1')).toStrictEqual(team);
+    });
+
+    it('round-trips a build with enemy and mode, and a team with a priority', async () => {
+      await db.builds.add(withSettings);
+      await db.teams.add(ordered);
+      const json = JSON.parse(JSON.stringify(await createBackup())) as unknown;
+      expect((json as { version: number }).version).toBe(1);
+      await clearAll();
+      await restoreBackup(parseBackup(json), 'replace');
+      expect(await db.builds.get('build-settings')).toEqual(withSettings);
+      expect(await db.teams.get('team-ordered')).toEqual(ordered);
+    });
+
+    it('restores a team whose priority is malformed, without the priority', () => {
+      const parsed = parseBackup({
+        format: BACKUP_FORMAT,
+        version: 1,
+        exportedAt: '2026-10-01T00:00:00.000Z',
+        tables: { ownedEchoes: [], roster: [], builds: [], teams: [{ ...team, priority: ['jiyan', 7] }] },
+      });
+      expect(parsed.tables.teams[0].priority).toBeUndefined();
+      expect(parsed.tables.teams[0].characterIds).toEqual(team.characterIds);
+    });
+  });
 });

@@ -1,5 +1,5 @@
 import type { Build, CharacterData, RosterEntry, SonataSetData, WeaponData } from '../data/schema.ts';
-import { characterResonanceModes } from '../domain/characterMods.ts';
+import { characterResonanceModes, type ResonanceMode } from '../domain/characterMods.ts';
 import { buildEnemyProfile, type EnemyKind } from '../domain/enemy.ts';
 import type { AllocationMember, AllocationResult } from './allocate.ts';
 import { pruneInputs } from './prune.ts';
@@ -14,7 +14,10 @@ import { pruneInputs } from './prune.ts';
  *   objective unless the caller picks another;
  * - context is `build.context`, else the Roster entry (only when the Roster
  *   weapon is the build's weapon);
- * - the enemy is the Calculator's current settings, shared by every member.
+ * - the enemy is `build.enemy`, else the Calculator's current settings;
+ * - a dual-mode character's Resonance Mode is `build.resonanceMode` when it
+ *   is one of `characterResonanceModes(id)`, else the caller's picker
+ *   choice. With neither, the member is blocked until the user picks one.
  */
 
 export interface EnemySettings {
@@ -32,12 +35,32 @@ export interface MemberInputs {
   characters: readonly CharacterData[];
   weapons: readonly WeaponData[];
   sonataSets: readonly SonataSetData[];
+  /** The Calculator's current settings: the fallback for builds saved without `enemy`. */
   enemy: EnemySettings;
+  /** Picker choice for a dual-mode character whose build saved no usable mode. */
+  resonanceMode?: ResonanceMode;
+}
+
+/** Shared by both outcomes so the row can keep showing its pickers. */
+interface ResolvedBase {
+  characterId: string;
+  choices: Build[];
+  /** Options for the required Resonance Mode picker; empty when none is needed. */
+  modeChoices: ResonanceMode[];
 }
 
 export type ResolvedMember =
-  | { ok: true; characterId: string; build: Build; choices: Build[]; member: AllocationMember }
-  | { ok: false; characterId: string; choices: Build[]; reason: string };
+  | (ResolvedBase & {
+      ok: true;
+      build: Build;
+      member: AllocationMember;
+      /** Enemy settings the member runs against, and where they came from. */
+      enemy: EnemySettings;
+      enemySource: 'build' | 'calculator';
+      /** Mode passed as `SearchData.resonanceMode`; null for single-mode kits. */
+      modeSource: 'build' | 'picker' | null;
+    })
+  | (ResolvedBase & { ok: false; reason: string });
 
 /** The member's own builds that carry an objective, newest first. */
 export function objectiveBuildsFor(builds: readonly Build[], characterId: string): Build[] {
@@ -49,15 +72,11 @@ export function objectiveBuildsFor(builds: readonly Build[], characterId: string
 export function resolveMember(input: MemberInputs): ResolvedMember {
   const { characterId } = input;
   const choices = objectiveBuildsFor(input.builds, characterId);
-  const block = (reason: string): ResolvedMember => ({ ok: false, characterId, choices, reason });
+  let modeChoices: ResonanceMode[] = [];
+  const block = (reason: string): ResolvedMember => ({ ok: false, characterId, choices, modeChoices, reason });
 
   const character = input.characters.find((c) => c.id === characterId);
   if (character === undefined) return block(`${characterId} is not in the current game data.`);
-  if (characterResonanceModes(characterId).length > 0) {
-    return block(
-      `${character.name} has Resonance Modes. Set the mode in the Calculator; allocating for dual-mode characters isn't supported here yet.`,
-    );
-  }
   const build = choices.find((b) => b.id === input.buildId) ?? choices[0];
   if (build === undefined || build.objective === undefined) {
     return block(`${character.name} has no saved build with an objective. Save one from the Calculator first.`);
@@ -83,21 +102,51 @@ export function resolveMember(input: MemberInputs): ResolvedMember {
   } catch {
     return block(`"${build.name}" no longer matches current game data (its skill is gone).`);
   }
+  const enemySettings = build.enemy ?? input.enemy;
   let enemy;
   try {
-    enemy = buildEnemyProfile(input.enemy.kind, input.enemy.level, input.enemy.baseRES, character.attribute);
+    enemy = buildEnemyProfile(enemySettings.kind, enemySettings.level, enemySettings.baseRES, character.attribute);
   } catch (err) {
     return block(err instanceof Error ? err.message : 'The enemy settings are invalid.');
+  }
+  const modes = characterResonanceModes(characterId);
+  let resonanceMode: ResonanceMode | undefined;
+  let modeSource: 'build' | 'picker' | null = null;
+  if (modes.length > 0) {
+    const saved = modes.find((m) => m === build.resonanceMode);
+    if (saved !== undefined) {
+      resonanceMode = saved;
+      modeSource = 'build';
+    } else {
+      modeChoices = modes;
+      if (input.resonanceMode === undefined || !modes.includes(input.resonanceMode)) {
+        return block(`"${build.name}" saved no Resonance Mode. Pick the mode ${character.name} runs in.`);
+      }
+      resonanceMode = input.resonanceMode;
+      modeSource = 'picker';
+    }
   }
   return {
     ok: true,
     characterId,
     build,
     choices,
+    modeChoices,
+    enemy: { ...enemySettings },
+    enemySource: build.enemy === undefined ? 'calculator' : 'build',
+    modeSource,
     member: {
       characterId,
       objective: build.objective,
-      context: { character, weapon, roster: context, sonataSets: [...input.sonataSets], enemy },
+      context: {
+        character,
+        weapon,
+        roster: context,
+        sonataSets: [...input.sonataSets],
+        enemy,
+        // Exactly as the Calculator passes it: absent for single-mode kits.
+        ...(resonanceMode === undefined ? {} : { resonanceMode }),
+      },
     },
   };
 }
@@ -112,8 +161,8 @@ export type AllocationBuildDraft = Omit<Build, 'id' | 'updatedAt'>;
 
 /**
  * One draft per member that got a build, in priority order. Objective,
- * `objectiveId`, weapon and context are the source build's / resolved ones,
- * so the saved build re-runs and shares like any other.
+ * `objectiveId`, weapon, context, enemy and Resonance Mode are the ones the
+ * run used, so the saved build re-runs and shares like any other.
  */
 export function allocationDrafts(input: {
   teamName: string;
@@ -137,6 +186,10 @@ export function allocationDrafts(input: {
       notes: `Team allocation for ${input.teamName} (greedy, priority ${index + 1} of ${count}).`,
       // Plain copy: the run used this context, and it must not alias store state.
       context: JSON.parse(JSON.stringify(resolved.member.context.roster)) as RosterEntry,
+      enemy: { ...resolved.enemy },
+      ...(resolved.member.context.resonanceMode === undefined
+        ? {}
+        : { resonanceMode: resolved.member.context.resonanceMode }),
     });
   });
   return drafts;

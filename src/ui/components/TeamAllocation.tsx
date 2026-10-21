@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Build, OwnedEcho, Snapshot, Team } from '../../data/schema.ts';
+import type { ResonanceMode } from '../../domain/characterMods.ts';
+import { teamPriority } from '../../domain/teams.ts';
 import {
+  ALLOCATION_COST_BUDGET,
   isAllocationAborted,
   planKey,
   runAllocation,
+  type AllocationCostBudget,
   type AllocationPlan,
   type AllocationProgress,
   type AllocationResult,
@@ -15,7 +19,9 @@ import { useInventoryStore } from '../../state/inventory.ts';
 import { useLibraryStore } from '../../state/library.ts';
 import { useRosterStore } from '../../state/roster.ts';
 import { useSnapshotStore } from '../../state/snapshotStore.ts';
+import { useTeamStore } from '../../state/teamStore.ts';
 import { echoDisplayName } from '../echoDisplay.ts';
+import { RESONANCE_MODE_LABELS } from '../format.ts';
 import { btnGhost, btnOutline, btnPrimary, labelClass, selectClass } from './classes.ts';
 import { MarkEquipped, type MarkedEquipped } from './MarkEquipped.tsx';
 import { Alert } from './ui.tsx';
@@ -34,6 +40,9 @@ interface Preview {
 }
 
 const num = (n: number): string => Math.round(n).toLocaleString();
+
+const enemyText = (e: { kind: string; level: number; baseRES: number }): string =>
+  `${e.kind === 'boss' ? 'boss' : 'mob'}, Lv ${e.level}, ${Math.round(e.baseRES * 100)}% base RES`;
 
 /**
  * Team-wide Echo allocation for one saved team: each member in priority
@@ -68,10 +77,14 @@ export function TeamAllocation({
   const enemyKind = useCalculatorStore((s) => s.enemyKind);
   const enemyLevel = useCalculatorStore((s) => s.enemyLevel);
   const enemyBaseRES = useCalculatorStore((s) => s.enemyBaseRES);
+  const savePriority = useTeamStore((s) => s.setPriority);
 
-  const [order, setOrder] = useState<string[]>([...team.characterIds]);
+  const [order, setOrder] = useState<string[]>(() => teamPriority(team));
   const [picks, setPicks] = useState<Record<string, string>>({});
+  const [modePicks, setModePicks] = useState<Record<string, ResonanceMode>>({});
   const [minLevel, setMinLevel] = useState('0');
+  const [costBudget, setCostBudget] = useState<AllocationCostBudget>(ALLOCATION_COST_BUDGET);
+  const [priorityError, setPriorityError] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const [preview, setPreview] = useState<Preview | null>(null);
   const [saving, setSaving] = useState(false);
@@ -101,9 +114,10 @@ export function TeamAllocation({
           weapons: snapshot.weapons,
           sonataSets: snapshot.sonataSets,
           enemy: { kind: enemyKind, level: enemyLevel, baseRES: enemyBaseRES },
+          resonanceMode: modePicks[characterId],
         }),
       ),
-    [order, picks, builds, roster, snapshot, enemyKind, enemyLevel, enemyBaseRES],
+    [order, picks, modePicks, builds, roster, snapshot, enemyKind, enemyLevel, enemyBaseRES],
   );
   const plan = useMemo<AllocationPlan | null>(() => {
     const members = resolved.flatMap((r) => (r.ok ? [r.member] : []));
@@ -112,23 +126,27 @@ export function TeamAllocation({
       members,
       echoes,
       minLevel: parsedMinLevel,
+      costBudget,
       dataStamp: `${snapshot.snapshotVersion}@${snapshot.fetchedAt}`,
     };
-  }, [resolved, echoes, minLevelValid, parsedMinLevel, snapshot.snapshotVersion, snapshot.fetchedAt]);
+  }, [resolved, echoes, minLevelValid, parsedMinLevel, costBudget, snapshot.snapshotVersion, snapshot.fetchedAt]);
   const currentKey = useMemo(() => (plan === null ? null : planKey(plan)), [plan]);
   const stale = preview !== null && preview.key !== currentKey;
   const running = status.kind === 'running';
   const ready = inventoryLoaded && buildsLoaded && rosterLoaded;
   const canRun = ready && plan !== null && echoes.length >= 5 && !running;
 
+  /** Reorder and save the new priority on the Team (one write per move). */
   const move = (index: number, delta: -1 | 1): void => {
-    setOrder((current) => {
-      const next = [...current];
-      const target = index + delta;
-      if (target < 0 || target >= next.length) return current;
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
+    const target = index + delta;
+    if (target < 0 || target >= order.length) return;
+    const next = [...order];
+    [next[index], next[target]] = [next[target], next[index]];
+    setOrder(next);
+    setPriorityError(null);
+    savePriority(team.id, [next[0], next[1], next[2]]).catch((err: unknown) =>
+      setPriorityError(err instanceof Error ? err.message : 'Could not save the order.'),
+    );
   };
 
   const handleRun = (): void => {
@@ -232,27 +250,68 @@ export function TeamAllocation({
                   ↓
                 </button>
               </div>
-              {r.ok ? (
-                r.choices.length > 1 ? (
-                  <div className="mt-2">
-                    <label htmlFor={`alloc-build-${team.id}-${r.characterId}`} className={labelClass}>
-                      {`Build for ${name}`}
-                    </label>
-                    <select
-                      id={`alloc-build-${team.id}-${r.characterId}`}
-                      value={r.build.id}
-                      disabled={running}
-                      onChange={(e) => setPicks((p) => ({ ...p, [r.characterId]: e.target.value }))}
-                      className={`${selectClass} mt-0.5`}
-                    >
-                      {r.choices.map((b) => (
-                        <option key={b.id} value={b.id}>{`${b.name} (${b.updatedAt.slice(0, 10)})`}</option>
-                      ))}
-                    </select>
-                  </div>
-                ) : (
+              {r.choices.length > 1 ? (
+                <div className="mt-2">
+                  <label htmlFor={`alloc-build-${team.id}-${r.characterId}`} className={labelClass}>
+                    {`Build for ${name}`}
+                  </label>
+                  <select
+                    id={`alloc-build-${team.id}-${r.characterId}`}
+                    value={(r.choices.find((b) => b.id === picks[r.characterId]) ?? r.choices[0]).id}
+                    disabled={running}
+                    onChange={(e) => setPicks((p) => ({ ...p, [r.characterId]: e.target.value }))}
+                    className={`${selectClass} mt-0.5`}
+                  >
+                    {r.choices.map((b) => (
+                      <option key={b.id} value={b.id}>{`${b.name} (${b.updatedAt.slice(0, 10)})`}</option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                r.ok && (
                   <p className="mt-1 text-xs text-fog">{`Using build “${r.build.name}” (objective and context saved with it).`}</p>
                 )
+              )}
+              {r.modeChoices.length > 0 && (
+                <div className="mt-2">
+                  <label htmlFor={`alloc-mode-${team.id}-${r.characterId}`} className={labelClass}>
+                    {`Resonance Mode for ${name}`}
+                  </label>
+                  <select
+                    id={`alloc-mode-${team.id}-${r.characterId}`}
+                    value={modePicks[r.characterId] ?? ''}
+                    required
+                    aria-invalid={!r.ok}
+                    disabled={running}
+                    onChange={(e) => {
+                      const mode = r.modeChoices.find((m) => m === e.target.value);
+                      setModePicks((p) => {
+                        const next = { ...p };
+                        if (mode === undefined) delete next[r.characterId];
+                        else next[r.characterId] = mode;
+                        return next;
+                      });
+                    }}
+                    className={`${selectClass} mt-0.5`}
+                  >
+                    <option value="">Pick a mode…</option>
+                    {r.modeChoices.map((mode) => (
+                      <option key={mode} value={mode}>{RESONANCE_MODE_LABELS[mode]}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {r.ok && r.modeSource === 'build' && r.member.context.resonanceMode !== undefined && (
+                <p className="mt-1 text-xs text-fog">
+                  {`Resonance Mode: ${RESONANCE_MODE_LABELS[r.member.context.resonanceMode]} (saved with the build).`}
+                </p>
+              )}
+              {r.ok ? (
+                <p className="mt-1 text-xs text-fog">
+                  {r.enemySource === 'build'
+                    ? `Enemy: ${enemyText(r.enemy)} (saved with the build).`
+                    : `Enemy: ${enemyText(r.enemy)} (the Calculator's current settings; this build saved none).`}
+                </p>
               ) : (
                 <p className="mt-1 text-xs text-amber">{r.reason}</p>
               )}
@@ -261,11 +320,13 @@ export function TeamAllocation({
         })}
       </ol>
 
+      {priorityError !== null && <p className="text-xs text-amber">{`The new order wasn't saved: ${priorityError}`}</p>}
+
       <p className="text-xs text-fog">
-        {`Enemy: ${enemyKind === 'boss' ? 'boss' : 'mob'}, Lv ${enemyLevel}, ${Math.round(enemyBaseRES * 100)}% base RES, from the Calculator's current settings. They aren't saved, so they reset to the defaults (mob, Lv 90, 10% RES) when the page reloads. Cost budget 12, no Sonata lock.`}
+        {`Builds saved with an enemy use it. The rest use the Calculator's current settings (${enemyText({ kind: enemyKind, level: enemyLevel, baseRES: enemyBaseRES })}), which aren't saved and reset to the defaults (mob, Lv 90, 10% RES) when the page reloads. Every member searches under a cost budget of ${costBudget}, the same budget your equipped Echoes are checked against, with no Sonata lock.`}
       </p>
 
-      <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
         <div>
           <label htmlFor={`alloc-min-level-${team.id}`} className={labelClass}>Minimum echo level</label>
           <input
@@ -277,6 +338,19 @@ export function TeamAllocation({
             disabled={running}
             className={`${selectClass} mt-0.5`}
           />
+        </div>
+        <div>
+          <label htmlFor={`alloc-budget-${team.id}`} className={labelClass}>Cost budget</label>
+          <select
+            id={`alloc-budget-${team.id}`}
+            value={costBudget}
+            onChange={(e) => setCostBudget(e.target.value === '10' ? 10 : 12)}
+            disabled={running}
+            className={`${selectClass} mt-0.5`}
+          >
+            <option value={12}>12</option>
+            <option value={10}>10</option>
+          </select>
         </div>
         <div className="flex flex-wrap gap-2 sm:col-span-2">
           <button type="button" onClick={handleRun} disabled={!canRun} className={`${btnPrimary} px-5 py-2`}>
@@ -306,8 +380,8 @@ export function TeamAllocation({
           <p className="font-display text-lg font-semibold text-ink">Preview</p>
           {stale && (
             <Alert tone="warning" role="status">
-              Your inputs changed since this preview (inventory, builds, order, enemy or minimum level). Run it again
-              before saving.
+              Your inputs changed since this preview (inventory, builds, order, enemy, Resonance Mode, cost budget or
+              minimum level). Run it again before saving.
             </Alert>
           )}
           <ol className="space-y-2">

@@ -12,6 +12,7 @@ import { useLibraryStore } from '../../state/library.ts';
 import { useRosterStore } from '../../state/roster.ts';
 import { useSnapshotStore } from '../../state/snapshotStore.ts';
 import type { MarkedEquipped } from './MarkEquipped.tsx';
+import { useTeamStore } from '../../state/teamStore.ts';
 import { TeamAllocation } from './TeamAllocation.tsx';
 
 const team: Team = { id: 't1', name: 'Main', characterIds: ['jiyan', 'verina', 'yangyang'] };
@@ -65,17 +66,48 @@ const inlineRun: RunFn = (data, request) => {
 };
 
 beforeEach(async () => {
-  await Promise.all([db.builds.clear(), db.roster.clear(), db.ownedEchoes.clear()]);
+  await Promise.all([db.builds.clear(), db.roster.clear(), db.ownedEchoes.clear(), db.teams.clear()]);
+  await db.teams.add(team);
+  useTeamStore.setState({ teams: [team], loaded: true });
   useInventoryStore.setState({ echoes: inventory(), loaded: true });
   useLibraryStore.setState({ builds: ['jiyan', 'verina', 'yangyang'].map(build), loaded: true });
   useRosterStore.setState({ entries: ['jiyan', 'verina', 'yangyang'].map(roster), loaded: true });
   useCalculatorStore.setState({ enemyKind: 'mob', enemyLevel: 90, enemyBaseRES: 0.1 });
 });
 
-function renderAllocation(over: { run?: RunFn; onSaved?: (rows: Build[]) => void; onMarked?: (marked: MarkedEquipped) => void } = {}) {
+function renderAllocation(
+  over: { run?: RunFn; onSaved?: (rows: Build[]) => void; onMarked?: (marked: MarkedEquipped) => void; team?: Team } = {},
+) {
   return render(
-    <TeamAllocation team={team} run={over.run ?? inlineRun} onSaved={over.onSaved ?? (() => undefined)} onMarked={over.onMarked} />,
+    <TeamAllocation
+      team={over.team ?? team}
+      run={over.run ?? inlineRun}
+      onSaved={over.onSaved ?? (() => undefined)}
+      onMarked={over.onMarked}
+    />,
   );
+}
+
+/** Wraps `inlineRun`, recording what each step was asked to search. */
+function recordingRun(): { run: RunFn; calls: { characterId: string; resonanceMode: unknown; costBudget: number }[] } {
+  const calls: { characterId: string; resonanceMode: unknown; costBudget: number }[] = [];
+  const run: RunFn = (data, request) => {
+    calls.push({ characterId: data.character.id, resonanceMode: data.resonanceMode, costBudget: request.costBudget });
+    return inlineRun(data, request);
+  };
+  return { run, calls };
+}
+
+/** jiyan, denia (dual-mode, Rectifier), yangyang; denia's build is `deniaBuild`. */
+function seedDenia(deniaBuild: Partial<Build> = {}): Team {
+  const withDenia: Team = { ...team, id: 't2', characterIds: ['jiyan', 'denia', 'yangyang'] };
+  useLibraryStore.setState({
+    builds: [{ ...build('verina'), characterId: 'denia', id: 'b-denia', name: 'Denia ATK', ...deniaBuild }, build('jiyan'), build('yangyang')],
+    loaded: true,
+  });
+  useRosterStore.setState({ entries: [roster('jiyan'), { ...roster('verina'), characterId: 'denia' }, roster('yangyang')], loaded: true });
+  useTeamStore.setState({ teams: [withDenia], loaded: true });
+  return withDenia;
 }
 
 describe('TeamAllocation', () => {
@@ -85,14 +117,30 @@ describe('TeamAllocation', () => {
     expect(screen.getByText(/different order can give a better total/i)).toBeInTheDocument();
     expect(screen.getByText(/nothing is saved or changed until you save builds or mark them as equipped/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/mob, Lv 90, 10% base RES, from the Calculator's current settings.*reset to the defaults/i),
+      screen.getByText(/Builds saved with an enemy use it\. The rest use the Calculator's current settings \(mob, Lv 90, 10% base RES\).*reset to the defaults/i),
     ).toBeInTheDocument();
+    expect(screen.getByText(/cost budget of 12, the same budget your equipped Echoes are checked against/)).toBeInTheDocument();
   });
 
-  it('follows the Calculator enemy settings', () => {
+  it('follows the Calculator enemy settings for builds that saved none', () => {
     useCalculatorStore.setState({ enemyKind: 'boss', enemyLevel: 100, enemyBaseRES: 0.2 });
     renderAllocation();
-    expect(screen.getByText(/boss, Lv 100, 20% base RES/)).toBeInTheDocument();
+    expect(screen.getByText(/current settings \(boss, Lv 100, 20% base RES\)/)).toBeInTheDocument();
+    const rows = within(screen.getByRole('list', { name: 'Priority order' })).getAllByRole('listitem');
+    for (const row of rows) {
+      expect(row).toHaveTextContent("Enemy: boss, Lv 100, 20% base RES (the Calculator's current settings; this build saved none).");
+    }
+  });
+
+  it("says per member when it uses the build's saved enemy instead", () => {
+    useLibraryStore.setState({
+      builds: [{ ...build('jiyan'), enemy: { kind: 'boss', level: 110, baseRES: 0.3 } }, build('verina'), build('yangyang')],
+      loaded: true,
+    });
+    renderAllocation();
+    const rows = within(screen.getByRole('list', { name: 'Priority order' })).getAllByRole('listitem');
+    expect(rows[0]).toHaveTextContent('Enemy: boss, Lv 110, 30% base RES (saved with the build).');
+    expect(rows[1]).toHaveTextContent("Enemy: mob, Lv 90, 10% base RES (the Calculator's current settings; this build saved none).");
   });
 
   it('previews each member in priority order with the honest baseline label', async () => {
@@ -122,21 +170,92 @@ describe('TeamAllocation', () => {
     expect(screen.getByRole('button', { name: 'Allocate Echoes' })).toBeDisabled();
   });
 
-  it('blocks Resonance Mode characters and points to the Calculator', () => {
-    useLibraryStore.setState({
-      builds: [{ ...build('verina'), characterId: 'denia', id: 'b-denia', weaponId: 'augment' }, build('jiyan'), build('yangyang')],
-      loaded: true,
-    });
-    useRosterStore.setState({ entries: [roster('jiyan'), { ...roster('verina'), characterId: 'denia' }, roster('yangyang')], loaded: true });
-    render(
-      <TeamAllocation
-        team={{ ...team, characterIds: ['jiyan', 'denia', 'yangyang'] }}
-        run={inlineRun}
-        onSaved={() => undefined}
-      />,
-    );
-    expect(screen.getByText(/Resonance Modes.*Calculator/)).toBeInTheDocument();
+  it('asks for the Resonance Mode of a dual-mode member whose build saved none, and blocks Run until set', async () => {
+    const user = userEvent.setup();
+    const withDenia = seedDenia();
+    const { run, calls } = recordingRun();
+    renderAllocation({ team: withDenia, run });
+
+    const picker = screen.getByLabelText('Resonance Mode for Denia');
+    expect(picker).toHaveValue('');
+    expect(picker).toBeRequired();
+    expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual(['Pick a mode…', 'Fusion Burst', 'Tune Strain']);
+    expect(screen.getByText(/saved no Resonance Mode\. Pick the mode Denia runs in/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Allocate Echoes' })).toBeDisabled();
+
+    await user.selectOptions(picker, 'tuneStrain');
+    expect(screen.getByRole('button', { name: 'Allocate Echoes' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Allocate Echoes' }));
+    await screen.findByRole('region', { name: 'Allocation preview' });
+
+    // Exactly as the Calculator does: the mode reaches SearchData, only for Denia.
+    expect(calls.filter((c) => c.characterId === 'denia').map((c) => c.resonanceMode)).toEqual(['tuneStrain']);
+    expect(calls.filter((c) => c.characterId !== 'denia').every((c) => c.resonanceMode === undefined)).toBe(true);
+  });
+
+  it("uses the build's saved Resonance Mode without asking", async () => {
+    const user = userEvent.setup();
+    const withDenia = seedDenia({ resonanceMode: 'fusionBurst' });
+    const { run, calls } = recordingRun();
+    renderAllocation({ team: withDenia, run });
+
+    expect(screen.queryByLabelText('Resonance Mode for Denia')).not.toBeInTheDocument();
+    expect(screen.getByText('Resonance Mode: Fusion Burst (saved with the build).')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Allocate Echoes' }));
+    await screen.findByRole('region', { name: 'Allocation preview' });
+    expect(calls.filter((c) => c.characterId === 'denia').map((c) => c.resonanceMode)).toEqual(['fusionBurst']);
+  });
+
+  it('saves the picked mode and the enemy each member ran against with the builds', async () => {
+    const user = userEvent.setup();
+    const withDenia = seedDenia({ enemy: { kind: 'boss', level: 100, baseRES: 0.2 } });
+    const onSaved = vi.fn();
+    renderAllocation({ team: withDenia, onSaved });
+    await user.selectOptions(screen.getByLabelText('Resonance Mode for Denia'), 'fusionBurst');
+    await user.click(screen.getByRole('button', { name: 'Allocate Echoes' }));
+    await user.click(await screen.findByRole('button', { name: 'Save as 3 builds' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+
+    const saved = (await db.builds.toArray()).filter((b) => b.name.startsWith('Main ·'));
+    const denia = saved.find((b) => b.characterId === 'denia')!;
+    expect(denia).toMatchObject({ resonanceMode: 'fusionBurst', enemy: { kind: 'boss', level: 100, baseRES: 0.2 } });
+    const jiyan = saved.find((b) => b.characterId === 'jiyan')!;
+    expect(jiyan.enemy).toEqual({ kind: 'mob', level: 90, baseRES: 0.1 });
+    expect(jiyan).not.toHaveProperty('resonanceMode');
+  });
+
+  it('goes stale when the picked Resonance Mode changes after the run', async () => {
+    const user = userEvent.setup();
+    const withDenia = seedDenia();
+    renderAllocation({ team: withDenia });
+    await user.selectOptions(screen.getByLabelText('Resonance Mode for Denia'), 'tuneStrain');
+    await user.click(screen.getByRole('button', { name: 'Allocate Echoes' }));
+    await screen.findByRole('region', { name: 'Allocation preview' });
+    expect(screen.getByRole('button', { name: 'Save as 3 builds' })).toBeEnabled();
+
+    await user.selectOptions(screen.getByLabelText('Resonance Mode for Denia'), 'fusionBurst');
+    expect(await screen.findByText(/your inputs changed since this preview/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save as 3 builds' })).toBeDisabled();
+  });
+
+  it('runs every step under the chosen cost budget, says so, and goes stale when it changes', async () => {
+    const user = userEvent.setup();
+    const { run, calls } = recordingRun();
+    renderAllocation({ run });
+    const budget = screen.getByLabelText('Cost budget');
+    expect(budget).toHaveValue('12');
+
+    await user.selectOptions(budget, '10');
+    expect(screen.getByText(/cost budget of 10, the same budget your equipped Echoes are checked against/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Allocate Echoes' }));
+    await screen.findByRole('region', { name: 'Allocation preview' });
+    // jiyan's baseline, then the three searches.
+    expect(calls.map((c) => c.costBudget)).toEqual([10, 10, 10, 10]);
+    expect(screen.getByRole('button', { name: 'Save as 3 builds' })).toBeEnabled();
+
+    await user.selectOptions(budget, '12');
+    expect(await screen.findByText(/your inputs changed since this preview/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save as 3 builds' })).toBeDisabled();
   });
 
   it('lets you reorder priorities with buttons', async () => {
@@ -149,6 +268,27 @@ describe('TeamAllocation', () => {
     await user.click(screen.getByRole('button', { name: 'Allocate Echoes' }));
     const preview = await screen.findByRole('region', { name: 'Allocation preview' });
     expect(within(preview).getAllByRole('listitem')[0]).toHaveTextContent('Priority 1 · Verina');
+  });
+
+  it('saves the order on the team on each reorder, so it survives a remount', async () => {
+    const user = userEvent.setup();
+    const first = renderAllocation();
+    await user.click(screen.getByRole('button', { name: 'Move Yangyang up' }));
+    await waitFor(() => expect(useTeamStore.getState().teams[0].priority).toEqual(['jiyan', 'yangyang', 'verina']));
+    await user.click(screen.getByRole('button', { name: 'Move Yangyang up' }));
+    await waitFor(() => expect(useTeamStore.getState().teams[0].priority).toEqual(['yangyang', 'jiyan', 'verina']));
+    expect((await db.teams.get('t1'))?.priority).toEqual(['yangyang', 'jiyan', 'verina']);
+    first.unmount();
+
+    renderAllocation({ team: useTeamStore.getState().teams[0] });
+    const order = within(screen.getByRole('list', { name: 'Priority order' })).getAllByRole('listitem');
+    expect(order.map((li) => li.textContent?.match(/^\d\.(\w+)/)?.[1])).toEqual(['Yangyang', 'Jiyan', 'Verina']);
+  });
+
+  it('ignores a saved priority that is not an order of the members', () => {
+    renderAllocation({ team: { ...team, priority: ['jiyan', 'rover', 'verina'] } });
+    const order = within(screen.getByRole('list', { name: 'Priority order' })).getAllByRole('listitem');
+    expect(order.map((li) => li.textContent?.match(/^\d\.(\w+)/)?.[1])).toEqual(['Jiyan', 'Verina', 'Yangyang']);
   });
 
   it('saves one build per member atomically, then reports the rows for Undo', async () => {

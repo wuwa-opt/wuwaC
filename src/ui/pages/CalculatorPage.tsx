@@ -668,6 +668,7 @@ export function CalculatorPage() {
                 echoes={echoes}
                 sonataSets={snapshot.sonataSets}
                 enemy={enemyProfile}
+                enemySettings={{ kind: calc.enemyKind, level: calc.enemyLevel, baseRES: calc.enemyBaseRES }}
                 resonanceMode={calc.resonanceMode ?? undefined}
                 blocks={calc.blocks}
                 buffs={calc.buffs}

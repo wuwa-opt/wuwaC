@@ -4,8 +4,10 @@ import {
   DEFAULT_ENEMY_LEVEL,
   DEFAULT_ENEMY_RES,
   MAX_ENEMY_LEVEL,
+  MAX_ENEMY_RES,
 } from './enemy.ts';
 import { computeResMultiplier } from './damage.ts';
+import { buildSchema } from '../data/schema.ts';
 
 describe('buildEnemyProfile', () => {
   it('exposes documented defaults (Lv90, 10% RES)', () => {
@@ -44,5 +46,20 @@ describe('buildEnemyProfile', () => {
     expect(() => buildEnemyProfile('mob', MAX_ENEMY_LEVEL + 1, 0.1, 'Aero')).toThrow(/enemy level/);
     expect(() => buildEnemyProfile('mob', 90, -0.01, 'Aero')).toThrow(/resistance/);
     expect(() => buildEnemyProfile('mob', 90, 0.81, 'Aero')).toThrow(/resistance/);
+  });
+});
+
+describe('saved build enemy bounds', () => {
+  // `buildSchema.enemy` can't import these (data layer); keep them in step.
+  const build = (enemy: unknown) => ({
+    id: 'b', name: 'B', characterId: 'jiyan', weaponId: 'w', echoIds: ['a', 'b', 'c', 'd', 'e'],
+    objectiveId: 'o', updatedAt: '2026-10-21T00:00:00.000Z', enemy,
+  });
+
+  it('match the Calculator limits exactly', () => {
+    expect(buildSchema.safeParse(build({ kind: 'mob', level: MAX_ENEMY_LEVEL, baseRES: MAX_ENEMY_RES })).success).toBe(true);
+    expect(buildSchema.safeParse(build({ kind: 'mob', level: MAX_ENEMY_LEVEL + 1, baseRES: 0.1 })).success).toBe(false);
+    expect(buildSchema.safeParse(build({ kind: 'mob', level: 90, baseRES: MAX_ENEMY_RES + 0.01 })).success).toBe(false);
+    expect(buildSchema.safeParse(build({ kind: 'boss', level: 1, baseRES: 0 })).success).toBe(true);
   });
 });

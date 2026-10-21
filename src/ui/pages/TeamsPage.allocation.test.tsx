@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Build, OwnedEcho, RosterEntry, Team } from '../../data/schema.ts';
 import { db } from '../../state/db.ts';
@@ -155,5 +155,33 @@ describe('TeamsPage allocation', () => {
 
     expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
     expect(screen.queryByText(/^Marked 15 Echoes/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the priority order across a reload, and resets it when the members change', async () => {
+    const user = userEvent.setup();
+    const names = (): (string | undefined)[] =>
+      within(screen.getByRole('list', { name: 'Priority order' }))
+        .getAllByRole('listitem')
+        .map((li) => li.textContent?.match(/^\d\.(\w+)/)?.[1]);
+    const view = render(<TeamsPage />);
+    await user.click(await screen.findByRole('button', { name: /allocate echoes across this team/i }));
+    await user.click(screen.getByRole('button', { name: 'Move Yangyang up' }));
+    await waitFor(async () => expect((await db.teams.get('t1'))?.priority).toEqual(['jiyan', 'yangyang', 'verina']));
+    view.unmount();
+
+    // A fresh page load: stores empty, everything re-read from IndexedDB.
+    useTeamStore.setState({ teams: [], loaded: false });
+    const reloaded = render(<TeamsPage />);
+    await user.click(await screen.findByRole('button', { name: /allocate echoes across this team/i }));
+    expect(names()).toEqual(['Jiyan', 'Yangyang', 'Verina']);
+
+    await act(async () => {
+      await useTeamStore.getState().setMembers('t1', ['jiyan', 'verina', 'rover']);
+    });
+    expect((await db.teams.get('t1'))?.priority).toBeUndefined();
+    reloaded.unmount();
+    render(<TeamsPage />);
+    await user.click(await screen.findByRole('button', { name: /allocate echoes across this team/i }));
+    expect(names()).toEqual(['Jiyan', 'Verina', 'rover']); // team order again ('rover' isn't in the data, so shown by id)
   });
 });

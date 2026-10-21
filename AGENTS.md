@@ -424,7 +424,25 @@ interface Team {
     weapon and enemy, the minimum level, and `dataStamp` (snapshot version
     and `fetchedAt`).
   - **Save:** "Save as builds" is `saveBuilds` (one transaction) with an
-    Undo (`removeBuilds`). Allocation never writes `equippedTo`.
+    Undo (`removeBuilds`). Saving never writes `equippedTo`.
+  - **Mark as equipped** (`MarkEquipped.tsx`, pure `optimizer/equip.ts`
+    `planEquip`). `equippedTo` mirrors the game, which the app can't
+    change, so this only *records* a re-gear done in the game. The copy
+    says so.
+    - Rules: each member with a result gets its 5 Echoes, and its other
+      recorded Echoes go back to the bag. An Echo worn by anyone else
+      moves (assignment beats unequip). Members without a result are
+      untouched, and locks don't matter.
+    - It is enabled only for a non-stale preview, behind a confirm step
+      that lists counts per character (Cancel focused) and is recomputed
+      at click time.
+    - `reassignEquipped` is one Dexie transaction that returns the previous
+      `equippedTo` of the changed rows. `restoreEquipped(previous,
+      applied)` restores only rows still holding the value it set.
+    - The Undo toast lives on the Teams page, in memory only, and is
+      dropped on an inventory `generation` change.
+    - After marking, the preview is stale by design (`equippedTo` is in
+      `planKey`): run again to compare against the new gear.
 - UI dynamics: live-feedback primitives in `src/ui/components/feedback.tsx` +
   `src/ui/toasts.ts`, motion hooks in `src/ui/motion.ts` (`useAnimatedNumber`,
   `useReveal` for scroll-in Windows, `useTypewriter` for the mascot bubble), command palette in

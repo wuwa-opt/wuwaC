@@ -50,6 +50,12 @@ function assertDefConsistent(draft: EchoDraft): void {
   }
 }
 
+/** One row's `equippedTo`, as written or as it was. */
+export interface EquipAssignment {
+  id: string;
+  equippedTo: string | null;
+}
+
 interface InventoryState {
   echoes: OwnedEcho[];
   loaded: boolean;
@@ -80,6 +86,23 @@ interface InventoryState {
    * re-import in between) is left alone and reported in `skipped`.
    */
   restoreEchoes: (rows: readonly OwnedEcho[]) => Promise<{ restored: OwnedEcho[]; skipped: OwnedEcho[] }>;
+  /**
+   * Record who wears which Echo (`equippedTo`), in one Dexie transaction.
+   * Mirrors a re-gear done in the game; the app can't change the game.
+   * Resolves to the PREVIOUS `{ id, equippedTo }` of every row that changed
+   * (read inside the transaction); unknown ids and rows already at the target
+   * are ignored. Locks are irrelevant. State is only touched after commit.
+   */
+  reassignEquipped: (changes: readonly EquipAssignment[]) => Promise<EquipAssignment[]>;
+  /**
+   * Undo `reassignEquipped`: write `previous` back in one transaction, but
+   * only for rows whose current `equippedTo` is still what `applied` set
+   * (a row changed or deleted since is left as is and listed in `skipped`).
+   */
+  restoreEquipped: (
+    previous: readonly EquipAssignment[],
+    applied: readonly EquipAssignment[],
+  ) => Promise<{ restored: string[]; skipped: string[] }>;
   /** Bumped by every `load()`; in-memory undo offers older than this are stale. */
   generation: number;
   /**
@@ -176,6 +199,42 @@ export const useInventoryStore = create<InventoryState>()((set, get) => ({
     });
     const back = new Set(restored.map((row) => row.id));
     set((s) => ({ echoes: [...s.echoes.filter((e) => !back.has(e.id)), ...restored] }));
+    return { restored, skipped };
+  },
+
+  reassignEquipped: async (changes) => {
+    const wanted = new Map(changes.map((c) => [c.id, c.equippedTo]));
+    const { previous, written } = await db.transaction('rw', db.ownedEchoes, async () => {
+      const rows = (await db.ownedEchoes.bulkGet([...wanted.keys()])).filter(
+        (row): row is OwnedEcho => row !== undefined && (row.equippedTo ?? null) !== wanted.get(row.id),
+      );
+      const next = rows.map((row) => ({ ...row, equippedTo: wanted.get(row.id) ?? null }));
+      await db.ownedEchoes.bulkPut(next);
+      return {
+        previous: rows.map((row) => ({ id: row.id, equippedTo: row.equippedTo ?? null })),
+        written: new Map(next.map((row) => [row.id, row])),
+      };
+    });
+    set((s) => ({ echoes: s.echoes.map((e) => written.get(e.id) ?? e) }));
+    return previous;
+  },
+
+  restoreEquipped: async (previous, applied) => {
+    const expected = new Map(applied.map((c) => [c.id, c.equippedTo]));
+    const { restored, skipped, written } = await db.transaction('rw', db.ownedEchoes, async () => {
+      const rows = await db.ownedEchoes.bulkGet(previous.map((p) => p.id));
+      const back: OwnedEcho[] = [];
+      const left: string[] = [];
+      previous.forEach((p, i) => {
+        const row = rows[i];
+        if (row !== undefined && expected.has(p.id) && (row.equippedTo ?? null) === expected.get(p.id)) {
+          back.push({ ...row, equippedTo: p.equippedTo });
+        } else left.push(p.id);
+      });
+      await db.ownedEchoes.bulkPut(back);
+      return { restored: back.map((row) => row.id), skipped: left, written: new Map(back.map((row) => [row.id, row])) };
+    });
+    set((s) => ({ echoes: s.echoes.map((e) => written.get(e.id) ?? e) }));
     return { restored, skipped };
   },
 

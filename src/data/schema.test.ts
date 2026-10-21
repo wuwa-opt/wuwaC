@@ -74,6 +74,36 @@ describe('user-data schemas', () => {
     expect(() => buildSchema.parse({ ...base, echoIds: ['a', 'b', 'c', 'd'] })).toThrow();
   });
 
+  it('accepts a build with the enemy and Resonance Mode its run used, and bounds the enemy', () => {
+    const base = {
+      id: 'b1',
+      name: 'My build',
+      characterId: 'denia',
+      weaponId: 'augment',
+      echoIds: ['a', 'b', 'c', 'd', 'e'],
+      objectiveId: 'Rotation DPR',
+      updatedAt: new Date().toISOString(),
+    };
+    const parsed = buildSchema.parse({ ...base, enemy: { kind: 'boss', level: 100, baseRES: 0.2 }, resonanceMode: 'tuneStrain' });
+    expect(parsed.enemy).toEqual({ kind: 'boss', level: 100, baseRES: 0.2 });
+    expect(parsed.resonanceMode).toBe('tuneStrain');
+    // Older builds lack both; nothing is added.
+    expect(Object.keys(buildSchema.parse(base))).not.toContain('enemy');
+    expect(() => buildSchema.parse({ ...base, enemy: { kind: 'elite', level: 90, baseRES: 0.1 } })).toThrow();
+    expect(() => buildSchema.parse({ ...base, enemy: { kind: 'mob', level: 121, baseRES: 0.1 } })).toThrow();
+    expect(() => buildSchema.parse({ ...base, enemy: { kind: 'mob', level: 90.5, baseRES: 0.1 } })).toThrow();
+    expect(() => buildSchema.parse({ ...base, enemy: { kind: 'mob', level: 90, baseRES: 0.81 } })).toThrow();
+    expect(() => buildSchema.parse({ ...base, resonanceMode: '' })).toThrow();
+  });
+
+  it('keeps a team priority, and parses a malformed one as absent', () => {
+    const team = { id: 't', name: 'T', characterIds: ['a', 'b', 'c'] };
+    expect(teamSchema.parse({ ...team, priority: ['c', 'a', 'b'] }).priority).toEqual(['c', 'a', 'b']);
+    expect(Object.keys(teamSchema.parse(team))).not.toContain('priority');
+    expect(teamSchema.parse({ ...team, priority: ['a', 'b'] }).priority).toBeUndefined();
+    expect(teamSchema.parse({ ...team, priority: 'abc' }).priority).toBeUndefined();
+  });
+
   it('rejects teams with duplicate members', () => {
     expect(() =>
       teamSchema.parse({ id: 't', name: 'T', characterIds: ['a', 'b', 'c'] }),

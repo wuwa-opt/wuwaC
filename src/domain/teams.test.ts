@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { OwnedEcho, StatKey, Team } from '../data/schema.ts';
-import { teamSonataCoverage } from './teams.ts';
+import { isTeamPermutation, teamPriority, teamSonataCoverage } from './teams.ts';
 
 function mkEcho(id: string, defId: string, sonataId: string, equippedTo: string | null): OwnedEcho {
   return {
@@ -46,5 +46,30 @@ describe('teamSonataCoverage', () => {
       { sonataId: 'sierra-gale', sonataName: 'Sierra Gale', count: 2 },
       { sonataId: 'rejuvenating-glow', sonataName: 'Rejuvenating Glow', count: 1 },
     ]);
+  });
+});
+
+describe('teamPriority', () => {
+  const members: [string, string, string] = ['jiyan', 'verina', 'yangyang'];
+
+  it('uses a saved permutation of the members', () => {
+    expect(teamPriority({ characterIds: members, priority: ['yangyang', 'jiyan', 'verina'] })).toEqual([
+      'yangyang',
+      'jiyan',
+      'verina',
+    ]);
+  });
+
+  it('falls back to team order for no priority or anything that is not a permutation', () => {
+    expect(teamPriority({ characterIds: members })).toEqual(members);
+    expect(teamPriority({ characterIds: members, priority: ['jiyan', 'jiyan', 'verina'] })).toEqual(members);
+    expect(teamPriority({ characterIds: members, priority: ['jiyan', 'verina', 'rover'] })).toEqual(members);
+  });
+
+  it('isTeamPermutation needs every member exactly once', () => {
+    expect(isTeamPermutation(['verina', 'yangyang', 'jiyan'], members)).toBe(true);
+    expect(isTeamPermutation(undefined, members)).toBe(false);
+    expect(isTeamPermutation(['verina', 'yangyang'], members)).toBe(false);
+    expect(isTeamPermutation(['verina', 'yangyang', 'jiyan', 'rover'], members)).toBe(false);
   });
 });

@@ -3,6 +3,7 @@ import { loadBundledSnapshot } from '../data/index.ts';
 import type { ObjectiveSpec, OwnedEcho, RosterEntry, StatKey } from '../data/schema.ts';
 import { standardMob } from '../domain/damage.ts';
 import {
+  ALLOCATION_COST_BUDGET,
   AllocationAborted,
   isAllocationAborted,
   planKey,
@@ -262,6 +263,48 @@ describe('runAllocation', () => {
     });
   });
 
+  describe('cost budget', () => {
+    // 4 + 3 + 3 + 1 + 1 = 12: legal under 12, over a budget of 10.
+    const costs: (1 | 3 | 4)[] = [4, 3, 3, 1, 1];
+    const equipped = costs.map((cost, i) => mkEcho(`c${i}`, [['atk', 100]], { cost, equippedTo: 'jiyan' }));
+    const plan = (costBudget?: 10 | 12): AllocationPlan => ({
+      members: [member('jiyan', 'atk'), member('verina', 'atk')],
+      echoes: [...equipped, ...atkRanked],
+      minLevel: 0,
+      dataStamp: 'test',
+      ...(costBudget === undefined ? {} : { costBudget }),
+    });
+
+    it('defaults to 12 and sends the chosen budget to every step, baseline included', async () => {
+      expect(ALLOCATION_COST_BUDGET).toBe(12);
+      for (const [budget, expected] of [[undefined, 12], [12, 12], [10, 10]] as const) {
+        const seen: number[] = [];
+        const run: RunFn = (data, req) => {
+          seen.push(req.costBudget);
+          return inlineRun(data, req);
+        };
+        await runAllocation(plan(budget), { run });
+        expect(seen).toEqual([expected, expected, expected]); // jiyan's baseline, then both searches
+      }
+    });
+
+    it('judges the baseline legal under 12 and over budget under 10', async () => {
+      const at12 = (await runAllocation(plan(12), { run: inlineRun })).members[0];
+      expect(at12.baseline?.echoIds).toEqual(['c0', 'c1', 'c2', 'c3', 'c4']);
+      const at10 = (await runAllocation(plan(10), { run: inlineRun })).members[0];
+      expect(at10).toMatchObject({ baseline: null, baselineNote: expect.stringContaining('over the 10 cost budget') });
+    });
+
+    it('keeps every pick within the budget', async () => {
+      const { members } = await runAllocation(plan(10), { run: inlineRun });
+      const byId = new Map([...equipped, ...atkRanked].map((e) => [e.id, e]));
+      for (const m of members) {
+        const total = m.best!.echoIds.reduce((sum, id) => sum + byId.get(id)!.cost, 0);
+        expect(total).toBeLessThanOrEqual(10);
+      }
+    });
+  });
+
   describe('cancellation', () => {
     function hangingRun() {
       const cancel = vi.fn();
@@ -345,6 +388,22 @@ describe('planKey', () => {
     const m = member('jiyan', 'atk');
     expect(planKey({ ...base, members: [{ ...m, context: { ...m.context, enemy: standardMob(80) } }] })).not.toBe(key);
     expect(planKey({ ...base })).toBe(key);
+  });
+
+  it('changes with the cost budget (absent means the default 12)', () => {
+    expect(planKey({ ...base, costBudget: 10 })).not.toBe(key);
+    expect(planKey({ ...base, costBudget: 12 })).toBe(key);
+  });
+
+  it("changes with a member's Resonance Mode", () => {
+    const m = member('jiyan', 'atk');
+    const withMode = (resonanceMode: 'fusionBurst' | 'tuneStrain'): AllocationPlan => ({
+      ...base,
+      members: [{ ...m, context: { ...m.context, resonanceMode } }],
+    });
+    expect(planKey(withMode('fusionBurst'))).not.toBe(key);
+    expect(planKey(withMode('fusionBurst'))).not.toBe(planKey(withMode('tuneStrain')));
+    expect(planKey(withMode('tuneStrain'))).toBe(planKey(withMode('tuneStrain')));
   });
 
   it('changes with any Echo field that a search reads', () => {

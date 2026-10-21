@@ -1,4 +1,5 @@
 import type { Attribute, DamageType, StatKey } from '../data/schema.ts';
+import type { ResonanceMode } from '../domain/characterMods.ts';
 
 /**
  * UI-layer number formatting. Ratios are stored as decimals but typed as
@@ -116,3 +117,10 @@ export function statLabel(stat: StatKey): string {
     }
   }
 }
+
+/** Display names for Resonance Modes (Calculator timeline, team allocation). */
+export const RESONANCE_MODE_LABELS: Record<ResonanceMode, string> = {
+  tuneRupture: 'Tune Rupture',
+  fusionBurst: 'Fusion Burst',
+  tuneStrain: 'Tune Strain',
+};

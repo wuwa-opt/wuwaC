@@ -260,12 +260,24 @@ interface Build {
 //   never in ownedEchoes, and its echoIds are the placeholders ref:0..ref:4.
 //   Code that resolves library echoIds against the inventory must skip
 //   reference builds (isReferenceBuild).
-// Both fields are optional and unindexed: no Dexie version bump, and backup
-// format v1 is unchanged (new backups are a superset).
+// Build.enemy / Build.resonanceMode: the Calculator enemy settings
+//   ({kind, level, baseRES}) and Resonance Mode the run used. Every
+//   save-from-a-run path writes them (RotationOptimizer saveBuild,
+//   allocation saveBuilds). resonanceMode is a plain string that consumers
+//   check against characterResonanceModes(id); an unknown one counts as
+//   unset. Neither ever appears in share links.
+// All four fields are optional and unindexed: no Dexie version bump, and
+// backup format v1 is unchanged (new backups are a superset).
 
 interface Team {
   id: string; name: string; characterIds: [string, string, string];
+  priority?: [string, string, string]; // team-allocation order (below)
 }
+
+// Team.priority: a permutation of characterIds, read only via teamPriority
+//   (anything else means team order; a malformed value parses as absent).
+//   setPriority writes it once per reorder; setMembers drops it when it no
+//   longer matches.
 ```
 
 ## Game-mechanics cheat sheet (see reference doc for full detail)
@@ -408,21 +420,28 @@ interface Team {
   greedy, not a joint optimum, and the UI must keep saying so.
   - **Search:** members search in a user-ordered priority with the
     existing exact search (`runOptimization`, injectable `run`). Each
-    searches the inventory minus the Echoes earlier members took.
+    searches the inventory minus the Echoes earlier members took. The
+    priority order is saved on the Team (`Team.priority`).
   - **Pool:** it ignores `equippedTo`, keeps locked Echoes and honours a
-    minimum level. Budget 12, no Sonata lock, top 1.
+    minimum level. Cost budget 12 (default, `ALLOCATION_COST_BUDGET`) or
+    10, used for every step and for the baseline's legality. No Sonata
+    lock, top 1.
   - **Inputs:** the objective and context come from a saved build
     (`Build.objective`, `Build.context`, else the Roster entry on the same
-    weapon). The enemy is the Calculator's session-only setting. Resonance
-    Mode characters are blocked.
+    weapon).
+    - The enemy is `Build.enemy`, else the Calculator's session-only
+      setting. Each member row says which one it uses.
+    - A dual-mode character's mode is `Build.resonanceMode`, else a
+      required per-member picker (`characterResonanceModes`). It is passed
+      as `SearchData.resonanceMode`.
   - **Baseline:** the same search over exactly the five `equippedTo`
     Echoes (best slot-1 order).
   - **Cancel:** `handle.cancel()` never settles its promise, so
     `runAllocation` races it against an `AbortSignal`.
   - **Stale preview:** Save is disabled when `planKey` changes: every Echo
     field except `locked`/`origin`, each member's objective, context,
-    weapon and enemy, the minimum level, and `dataStamp` (snapshot version
-    and `fetchedAt`).
+    weapon, enemy and Resonance Mode, the cost budget, the minimum level,
+    and `dataStamp` (snapshot version and `fetchedAt`).
   - **Save:** "Save as builds" is `saveBuilds` (one transaction) with an
     Undo (`removeBuilds`). Saving never writes `equippedTo`.
   - **Mark as equipped** (`MarkEquipped.tsx`, pure `optimizer/equip.ts`

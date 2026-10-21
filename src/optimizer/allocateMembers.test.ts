@@ -95,16 +95,72 @@ describe('resolveMember', () => {
     expect(reason(resolveMember(inputs({ builds: [stale] })))).toMatch(/no longer matches current game data/);
   });
 
-  it('blocks dual-mode (Resonance Mode) characters and points to the Calculator', () => {
-    const denia = resolveMember(
-      inputs({
-        characterId: 'denia',
-        builds: [mkBuild('d', { characterId: 'denia', weaponId: 'augment' })],
-        roster: [rosterFor('denia', 'augment')],
-      }),
+  describe('Resonance Mode (dual-mode characters)', () => {
+    const denia = (build: Partial<Build> = {}, over: Partial<MemberInputs> = {}) =>
+      resolveMember(
+        inputs({
+          characterId: 'denia',
+          builds: [mkBuild('d', { characterId: 'denia', weaponId: 'augment', ...build })],
+          roster: [rosterFor('denia', 'augment')],
+          ...over,
+        }),
+      );
+
+    it('uses the mode saved on the build, with no picker', () => {
+      const r = denia({ resonanceMode: 'tuneStrain' }, { resonanceMode: 'fusionBurst' });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.member.context.resonanceMode).toBe('tuneStrain'); // the build wins over a stale picker
+      expect(r.modeSource).toBe('build');
+      expect(r.modeChoices).toEqual([]);
+    });
+
+    it('without a saved mode, offers a required picker and blocks until it is set', () => {
+      const unset = denia();
+      expect(unset.ok).toBe(false);
+      expect(!unset.ok && unset.reason).toMatch(/saved no Resonance Mode.*Pick the mode Denia runs in/);
+      expect(unset.modeChoices).toEqual(['fusionBurst', 'tuneStrain']);
+
+      const picked = denia({}, { resonanceMode: 'fusionBurst' });
+      expect(picked.ok).toBe(true);
+      if (!picked.ok) return;
+      expect(picked.member.context.resonanceMode).toBe('fusionBurst');
+      expect(picked.modeSource).toBe('picker');
+      expect(picked.modeChoices).toEqual(['fusionBurst', 'tuneStrain']); // the picker stays visible
+    });
+
+    it("treats a saved or picked mode the character doesn't have as unset", () => {
+      expect(denia({ resonanceMode: 'tuneRupture' }).ok).toBe(false);
+      expect(denia({ resonanceMode: 'tuneRupture' }).modeChoices).toEqual(['fusionBurst', 'tuneStrain']);
+      expect(denia({}, { resonanceMode: 'tuneRupture' }).ok).toBe(false);
+    });
+
+    it('passes no mode for single-mode characters, even if a build carries one', () => {
+      const r = resolveMember(inputs({ builds: [mkBuild('b1', { resonanceMode: 'tuneStrain' })], resonanceMode: 'fusionBurst' }));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.member.context).not.toHaveProperty('resonanceMode');
+      expect(r.modeSource).toBeNull();
+      expect(r.modeChoices).toEqual([]);
+    });
+  });
+
+  it("uses the build's saved enemy over the Calculator's, and says which", () => {
+    const calculator = { kind: 'mob' as const, level: 90, baseRES: 0.1 };
+    const saved = resolveMember(
+      inputs({ builds: [mkBuild('b1', { enemy: { kind: 'boss', level: 100, baseRES: 0.2 } })], enemy: calculator }),
     );
-    expect(denia.ok).toBe(false);
-    expect(!denia.ok && denia.reason).toMatch(/Resonance Modes.*Calculator/);
+    const fallback = resolveMember(inputs({ enemy: calculator }));
+    expect(saved.ok && fallback.ok).toBe(true);
+    if (!saved.ok || !fallback.ok) return;
+    expect(saved.enemySource).toBe('build');
+    expect(saved.enemy).toEqual({ kind: 'boss', level: 100, baseRES: 0.2 });
+    expect(saved.member.context.enemy.level).toBe(100);
+    const attribute = saved.member.context.character.attribute;
+    expect(saved.member.context.enemy.baseResistance[attribute]).toBe(0.4); // boss preset floor
+    expect(fallback.enemySource).toBe('calculator');
+    expect(fallback.enemy).toEqual(calculator);
+    expect(fallback.member.context.enemy.baseResistance[attribute]).toBe(0.1);
   });
 
   it("builds the enemy from the Calculator's settings for the member's attribute", () => {
@@ -173,6 +229,32 @@ describe('allocationDrafts', () => {
     expect(draft.notes).toContain('greedy, priority 1 of 2');
     // Passes the real build schema (context must match character and weapon).
     expect(() => buildSchema.parse({ ...draft, id: 'x', updatedAt: new Date().toISOString() })).not.toThrow();
+  });
+
+  it('records the enemy and Resonance Mode the run used', () => {
+    const calculatorEnemy = resolveMember(inputs({ enemy: { kind: 'boss', level: 95, baseRES: 0.3 } }));
+    const dual = resolveMember(
+      inputs({
+        characterId: 'denia',
+        builds: [mkBuild('d', { characterId: 'denia', weaponId: 'augment', enemy: { kind: 'mob', level: 80, baseRES: 0 } })],
+        roster: [rosterFor('denia', 'augment')],
+        resonanceMode: 'tuneStrain',
+      }),
+    );
+    const both: AllocationResult = {
+      members: [
+        { characterId: 'jiyan', pool: 10, best: ranked(['e1', 'e2', 'e3', 'e4', 'e5']), baseline: null, baselineNote: 'x' },
+        { characterId: 'denia', pool: 5, best: ranked(['f1', 'f2', 'f3', 'f4', 'f5']), baseline: null, baselineNote: 'x' },
+      ],
+    };
+    const [jiyan, denia] = allocationDrafts({ teamName: 'Main', resolved: [calculatorEnemy, dual], allocation: both, characterName: (id) => id });
+    expect(jiyan.enemy).toEqual({ kind: 'boss', level: 95, baseRES: 0.3 }); // the Calculator's, as run
+    expect(jiyan).not.toHaveProperty('resonanceMode');
+    expect(denia.enemy).toEqual({ kind: 'mob', level: 80, baseRES: 0 }); // the build's own
+    expect(denia.resonanceMode).toBe('tuneStrain'); // the picker's choice
+    for (const d of [jiyan, denia]) {
+      expect(() => buildSchema.parse({ ...d, id: 'x', updatedAt: new Date().toISOString() })).not.toThrow();
+    }
   });
 
   it('copies the context instead of aliasing store state', () => {

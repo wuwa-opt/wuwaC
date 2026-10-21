@@ -10,6 +10,7 @@ import type {
 } from '../../data/schema.ts';
 import type { ResonanceMode } from '../../domain/characterMods.ts';
 import type { CritMode, EnemyProfile } from '../../domain/damage.ts';
+import type { EnemySettings } from '../../optimizer/allocateMembers.ts';
 import { runOptimization, type OptimizationHandle } from '../../optimizer/worker.ts';
 import { selectCandidates, type OptimizeRequest, type SearchData, type SearchResult } from '../../optimizer/search.ts';
 import { useLibraryStore } from '../../state/library.ts';
@@ -29,6 +30,8 @@ interface RotationOptimizerProps {
   echoes: OwnedEcho[];
   sonataSets: SonataSetData[];
   enemy: EnemyProfile;
+  /** The Calculator inputs `enemy` was built from; saved with the build. */
+  enemySettings: EnemySettings;
   blocks: RotationBlockSpec[];
   buffs: RotationBuffSpec[];
   globalBuffIds: string[];
@@ -47,7 +50,7 @@ interface RotationOptimizerProps {
  */
 export function RotationOptimizer(props: RotationOptimizerProps) {
   const {
-    character, weapon, roster, echoes, sonataSets, enemy,
+    character, weapon, roster, echoes, sonataSets, enemy, enemySettings,
     blocks, buffs, globalBuffIds, crit, resonanceMode, currentDpr, rotationTime, onApply,
   } = props;
   const saveBuild = useLibraryStore((s) => s.saveBuild);
@@ -62,7 +65,7 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
   const [minLevel, setMinLevel] = useState('0');
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const [result, setResult] = useState<SearchResult | null>(null);
-  const [lastRun, setLastRun] = useState<{ data: SearchData; request: OptimizeRequest } | null>(null);
+  const [lastRun, setLastRun] = useState<{ data: SearchData; request: OptimizeRequest; enemy: EnemySettings } | null>(null);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [saveName, setSaveName] = useState('');
 
@@ -111,6 +114,7 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
       objective: { kind: 'rotation-dpr', blocks, buffs, globalBuffIds, crit },
       topN: parsedTopN,
     };
+    const usedEnemy = { ...enemySettings };
     runRef.current?.cancel();
     const runId = (runCounter.current += 1);
     const handle = runOptimization(data, request);
@@ -124,7 +128,7 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
       (searchResult) => {
         if (runCounter.current !== runId) return;
         setResult(searchResult);
-        setLastRun({ data, request });
+        setLastRun({ data, request, enemy: usedEnemy });
         setStatus({ kind: 'done' });
       },
       (err: unknown) => {
@@ -160,6 +164,9 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
         ...(forteUnlockedIds === undefined ? {} : { forteUnlockedIds: [...forteUnlockedIds] }),
         ...(weaponAscension === undefined ? {} : { weaponAscension }),
       },
+      // The run's enemy and mode, so team allocation re-runs it as scored here.
+      enemy: { ...lastRun.enemy },
+      ...(lastRun.data.resonanceMode === undefined ? {} : { resonanceMode: lastRun.data.resonanceMode }),
     });
     setSavingKey(null);
     setSaveName('');

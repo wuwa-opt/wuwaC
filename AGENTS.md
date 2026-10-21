@@ -405,6 +405,13 @@ interface Team {
   - That covers the top-1 result at minimum level 0, for the saved
     objectives only. A build that can't be checked against the current
     snapshot blocks all fodder.
+- **Echo edits keep gear.** `EchoDraft.equippedTo` is optional. The Echo
+  form never submits it, so `updateEcho` (a merge) keeps `equippedTo` and
+  `locked`; a new Echo starts unequipped. Don't let a form write them.
+- **Def checks use the active snapshot.** `state/inventory.ts` and
+  `EchoForm` read `useSnapshotStore`, never `loadBundledSnapshot()`. Only
+  `data/`, `snapshotStore`, the dev seed and the Database page's bundled
+  date use the bundle directly.
 - **Delete undo.** Every Echo delete, single or bulk, shows an Undo toast
   (10 s, paused while hovered or focused). `useInventoryStore.removeEchoes`
   and `restoreEchoes` each run in one Dexie transaction. `removeEchoes`
@@ -486,6 +493,10 @@ interface Team {
     Save as reference, Optimize with my Echoes (a non-persisted Calculator
     draft; the roster is never written) and Dismiss. Each resolves the link
     to `#builds`.
+- **Picked-file caps.** Read user-picked JSON only through
+  `ui/readFile.ts` `readTextFile`, which checks the size before
+  `file.text()`. Backups are capped at 16 MiB and Kamera imports at 8 MiB,
+  at least 10x a real inventory (~400 B per Echo, measured).
 - **Downloads and errors.** File downloads go through `src/ui/download.ts`
   (`downloadBlob`, `downloadBackup`): object URLs are revoked after a delay,
   never right after `click()`. `src/ui/components/ErrorBoundary.tsx` wraps

@@ -1,11 +1,17 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { loadBundledSnapshot } from '../../data/index.ts';
+import { resetSnapshotStoreForTests, useSnapshotStore } from '../../state/snapshotStore.ts';
 import { EchoForm } from './EchoForm.tsx';
 
 async function pickDef(user: ReturnType<typeof userEvent.setup>, id: string) {
   await user.selectOptions(screen.getByLabelText(/^echo$/i), id);
 }
+
+afterEach(() => {
+  resetSnapshotStoreForTests();
+});
 
 describe('EchoForm', () => {
   it('blocks submit until an Echo is picked', async () => {
@@ -71,6 +77,26 @@ describe('EchoForm', () => {
     expect(draft.sonataId).toBe('sierra-gale');
     expect(draft.mainStat).toEqual({ stat: 'atkPct', value: 0.3 });
     expect(draft.label).toBeUndefined();
+    // Gear is recorded by the game, not the form: an edit must not overwrite it.
+    expect(draft).not.toHaveProperty('equippedTo');
+  });
+
+  it('offers Echo defs from the active snapshot, not only the bundle', async () => {
+    const user = userEvent.setup();
+    const bundled = loadBundledSnapshot();
+    const hooscamp = bundled.echoDefs.find((d) => d.id === 'hooscamp');
+    if (!hooscamp) throw new Error('fixture: hooscamp missing from the bundle');
+    useSnapshotStore.setState({
+      snapshot: { ...bundled, echoDefs: [...bundled.echoDefs, { ...hooscamp, id: 'published-later', name: 'Published Later' }] },
+      source: 'cache',
+    });
+    try {
+      render(<EchoForm submitLabel="Add Echo" onSubmit={() => {}} />);
+      await pickDef(user, 'published-later');
+      expect(screen.getByLabelText(/^echo$/i)).toHaveValue('published-later');
+    } finally {
+      resetSnapshotStoreForTests();
+    }
   });
 
   it('warns on above-reference values without blocking submit', async () => {

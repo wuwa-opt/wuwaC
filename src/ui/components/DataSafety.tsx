@@ -9,6 +9,7 @@ import {
 } from '../../state/backup.ts';
 import { requestPersistentStorage, storageStatus, type StorageStatus } from '../../state/persistence.ts';
 import { downloadBackup } from '../download.ts';
+import { MAX_BACKUP_BYTES, readTextFile } from '../readFile.ts';
 import { btnDangerGhost, btnGhost, btnOutline, btnPrimary } from './classes.ts';
 import { Alert, Window } from './ui.tsx';
 
@@ -54,7 +55,7 @@ export function DataSafety({ onToast }: { onToast: (message: string, tone?: 'suc
     if (file === undefined) return;
     setError(null);
     try {
-      setPending({ backup: parseBackup(JSON.parse(await file.text()) as unknown), fileName: file.name });
+      setPending({ backup: parseBackup(JSON.parse(await readTextFile(file, MAX_BACKUP_BYTES, 'a backup')) as unknown), fileName: file.name });
     } catch (err) {
       setPending(null);
       setError(err instanceof SyntaxError ? 'That file is not valid JSON.' : err instanceof Error ? err.message : String(err));

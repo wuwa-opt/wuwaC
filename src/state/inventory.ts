@@ -1,16 +1,22 @@
 import { create } from 'zustand';
-import { findEchoDef, loadBundledSnapshot } from '../data/index.ts';
+import { findEchoDef } from '../data/index.ts';
 import { ownedEchoSchema, type EchoDefData, type OwnedEcho } from '../data/schema.ts';
 import { db } from './db.ts';
+import { useSnapshotStore } from './snapshotStore.ts';
 
 /**
  * Form input for one Echo. The store derives identity: `id` is generated
  * and `origin` is always manual here. `echoDefId` must be a real synced
  * definition — the form picks it, never the label (Phase 3 decision:
  * legacy slugified rows are force re-linked on next edit).
+ *
+ * `equippedTo` is optional: a new row starts unequipped (importers may set
+ * it), and an edit that omits it keeps the stored value. The Echo form
+ * never submits it — it records the game's gear, which the form doesn't own.
  */
-export type EchoDraft = Omit<OwnedEcho, 'id' | 'origin'> & {
+export type EchoDraft = Omit<OwnedEcho, 'id' | 'origin' | 'equippedTo'> & {
   label?: string;
+  equippedTo?: string | null;
 };
 
 /** Row-level def problems. `orphan` = unknown def; the rest = known-def mismatch. */
@@ -20,7 +26,7 @@ export interface EchoDefIssue {
 }
 
 /** Check a row against its echo def. Empty = consistent. Tolerant reads use this; writes reject. */
-export function echoDefIssues(echo: Pick<OwnedEcho, 'echoDefId' | 'sonataId' | 'cost' | 'mainStat'>, defs: readonly EchoDefData[] = loadBundledSnapshot().echoDefs): EchoDefIssue[] {
+export function echoDefIssues(echo: Pick<OwnedEcho, 'echoDefId' | 'sonataId' | 'cost' | 'mainStat'>, defs: readonly EchoDefData[] = useSnapshotStore.getState().snapshot.echoDefs): EchoDefIssue[] {
   const def = defs.find((d) => d.id === echo.echoDefId);
   if (!def) {
     return [{ kind: 'orphan', message: `No echo definition matches ${JSON.stringify(echo.echoDefId)} — pick the real Echo to re-link.` }];
@@ -38,9 +44,9 @@ export function echoDefIssues(echo: Pick<OwnedEcho, 'echoDefId' | 'sonataId' | '
   return issues;
 }
 
-/** Strict write path: drafts must be fully def-consistent. */
+/** Strict write path: drafts must be fully def-consistent with the ACTIVE snapshot (an adopted newer publication counts). */
 function assertDefConsistent(draft: EchoDraft): void {
-  const def = findEchoDef(loadBundledSnapshot(), draft.echoDefId);
+  const def = findEchoDef(useSnapshotStore.getState().snapshot, draft.echoDefId);
   if (!def) {
     throw new Error(`unknown echo definition: ${JSON.stringify(draft.echoDefId)} — pick the Echo from the list`);
   }
@@ -146,7 +152,7 @@ export const useInventoryStore = create<InventoryState>()((set, get) => ({
   updateEcho: async (id, patch) => {
     const existing = get().echoes.find((e) => e.id === id);
     if (!existing) throw new Error(`unknown echo: ${JSON.stringify(id)}`);
-    const merged: EchoDraft = { ...existing, ...patch };
+    const merged = { ...existing, ...patch };
     assertDefConsistent(merged);
     const row = ownedEchoSchema.parse(merged);
     await db.ownedEchoes.put(row);

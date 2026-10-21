@@ -160,6 +160,87 @@ describe('RotationOptimizer progress', () => {
   });
 });
 
+describe('RotationOptimizer cancel', () => {
+  const result: SearchResult = {
+    builds: [{ echoIds: ['a', 'b', 'e', 'f', 'g'], score: 1000, sheet: emptySheet(), warnings: [], appliedAssumptions: [] }],
+    evaluated: 5000,
+    scored: 120,
+    total: 5000,
+    prunedEchoes: [],
+  };
+
+  it('offers Cancel only while running; it stops the worker and returns to idle with no error', async () => {
+    const user = userEvent.setup();
+    const fake = fakeHandle();
+    run.mockReturnValue(fake.handle);
+    renderOptimizer();
+    expect(screen.queryByRole('button', { name: /^cancel$/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    act(() => fake.progress(10, 5000));
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }));
+    expect(fake.handle.cancel).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^cancel$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /find best builds/i })).toBeEnabled();
+  });
+
+  it('ignores progress, results and errors that arrive after Cancel', async () => {
+    const user = userEvent.setup();
+    const fake = fakeHandle();
+    run.mockReturnValue(fake.handle);
+    renderOptimizer();
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }));
+    await act(async () => {
+      fake.progress(99, 5000);
+      fake.resolve(result);
+      await fake.handle.promise;
+    });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Checked 5,000 combos/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /apply to loadout/i })).not.toBeInTheDocument();
+  });
+
+  it('a late rejection after Cancel shows no error', async () => {
+    const user = userEvent.setup();
+    let reject!: (err: Error) => void;
+    const handle: OptimizationHandle = {
+      promise: new Promise<SearchResult>((_, r) => {
+        reject = r;
+      }),
+      cancel: vi.fn(),
+      onProgress: () => {},
+    };
+    run.mockReturnValue(handle);
+    renderOptimizer();
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }));
+    await act(async () => {
+      reject(new Error('worker terminated'));
+      await handle.promise.catch(() => {});
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('a new run after Cancel works normally', async () => {
+    const user = userEvent.setup();
+    const first = fakeHandle();
+    const second = fakeHandle();
+    run.mockReturnValueOnce(first.handle).mockReturnValueOnce(second.handle);
+    renderOptimizer();
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }));
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    await act(async () => {
+      first.resolve({ ...result, evaluated: 1 });
+      second.resolve({ ...result, evaluated: 4242 });
+      await second.handle.promise;
+    });
+    expect(screen.getByText(/Checked 4,242 combos/)).toBeInTheDocument();
+  });
+});
+
 describe('RotationOptimizer save', () => {
   it('saves the context the run used, not the Roster', async () => {
     await db.builds.clear();

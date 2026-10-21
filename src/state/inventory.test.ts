@@ -1,8 +1,10 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadBundledSnapshot } from '../data/index.ts';
 import { ownedEchoSchema } from '../data/schema.ts';
 import { db } from './db.ts';
 import { useInventoryStore, type EchoDraft } from './inventory.ts';
+import { resetSnapshotStoreForTests, useSnapshotStore } from './snapshotStore.ts';
 
 const draft: EchoDraft = {
   label: 'Hooscamp',
@@ -104,6 +106,23 @@ describe('inventory store', () => {
     });
     expect(updated.echoDefId).toBe('hooscamp');
     expect(updated.label).toBe('Hooscamp Alpha');
+  });
+
+  it('updateEcho keeps equippedTo and locked when the patch omits them (what the Echo form submits)', async () => {
+    const created = await useInventoryStore.getState().addEcho({ ...draft, equippedTo: 'jiyan' });
+    await useInventoryStore.getState().setLocked([created.id], true);
+    const formDraft: EchoDraft = { ...draft, level: 20 };
+    delete formDraft.equippedTo;
+    const updated = await useInventoryStore.getState().updateEcho(created.id, formDraft);
+    expect(updated).toMatchObject({ level: 20, equippedTo: 'jiyan', locked: true });
+    expect(await db.ownedEchoes.get(created.id)).toMatchObject({ level: 20, equippedTo: 'jiyan', locked: true });
+  });
+
+  it('addEcho without equippedTo starts unequipped', async () => {
+    const formDraft: EchoDraft = { ...draft };
+    delete formDraft.equippedTo;
+    const created = await useInventoryStore.getState().addEcho(formDraft);
+    expect(created.equippedTo).toBeNull();
   });
 
   it('updateEcho rejects def-inconsistent patches', async () => {
@@ -436,5 +455,36 @@ describe('inventory store: equipped reassignment', () => {
 
     expect(await worn()).toEqual(['calcharo', 'calcharo', 'calcharo', 'calcharo']);
     expect(useInventoryStore.getState().echoes.every((e) => e.equippedTo === 'calcharo')).toBe(true);
+  });
+});
+
+describe('inventory store: active snapshot', () => {
+  const newDef = (): EchoDraft => ({ ...draft, echoDefId: 'published-later', label: undefined });
+
+  afterEach(() => {
+    resetSnapshotStoreForTests();
+  });
+
+  it('rejects an Echo def only a newer publication holds until that snapshot is active', async () => {
+    await expect(useInventoryStore.getState().addEcho(newDef())).rejects.toThrow(/unknown echo definition/);
+  });
+
+  it('add, edit and import accept a def from the active snapshot that the bundle lacks', async () => {
+    const bundled = loadBundledSnapshot();
+    const hooscamp = bundled.echoDefs.find((d) => d.id === 'hooscamp');
+    if (!hooscamp) throw new Error('fixture: hooscamp missing from the bundle');
+    expect(bundled.echoDefs.some((d) => d.id === 'published-later')).toBe(false);
+    useSnapshotStore.setState({
+      snapshot: { ...bundled, echoDefs: [...bundled.echoDefs, { ...hooscamp, id: 'published-later', name: 'Published Later' }] },
+      source: 'cache',
+    });
+
+    const store = useInventoryStore.getState();
+    const created = await store.addEcho(newDef());
+    expect(created.echoDefId).toBe('published-later');
+    const updated = await store.updateEcho(created.id, { level: 10 });
+    expect(updated.level).toBe(10);
+    const [imported] = await store.importEchoes([newDef()], 'import:test');
+    expect(imported.echoDefId).toBe('published-later');
   });
 });

@@ -1,9 +1,10 @@
 import { useState, type FormEvent } from 'react';
-import { findEchoDef, loadBundledSnapshot } from '../../data/index.ts';
+import { findEchoDef } from '../../data/index.ts';
 import { MAIN_STAT_RANGES, SUB_STAT_TIERS } from '../../data/echoStats.ts';
 import { MAIN_STAT_POOLS, SUBSTAT_POOL } from '../../data/placeholders.ts';
 import type { StatKey } from '../../data/schema.ts';
 import type { EchoDraft } from '../../state/inventory.ts';
+import { useSnapshotStore } from '../../state/snapshotStore.ts';
 import { isPercentStat, parseDisplayValue, statLabel, toDisplayValue } from '../format.ts';
 import { btnGhost, btnOutline, btnPrimary, chipClass, inputClass, labelClass } from './classes.ts';
 import { Alert } from './ui.tsx';
@@ -58,7 +59,7 @@ function parseRarity(text: string): number {
 }
 
 export function EchoForm({ initial, submitLabel, onSubmit }: EchoFormProps) {
-  const snapshot = loadBundledSnapshot();
+  const snapshot = useSnapshotStore((s) => s.snapshot);
   const [values, setValues] = useState<EchoFormValues>(() => ({
     ...defaultValues(),
     ...initial,
@@ -233,7 +234,6 @@ export function EchoForm({ initial, submitLabel, onSubmit }: EchoFormProps) {
       mainStat: { stat: values.mainStat.stat, value: mainValue },
       ...(secondMainStat ? { secondMainStat } : {}),
       substats,
-      equippedTo: null,
     });
   };
 

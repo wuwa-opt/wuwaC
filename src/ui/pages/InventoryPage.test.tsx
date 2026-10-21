@@ -6,6 +6,8 @@ import type { Build, OwnedEcho } from '../../data/schema.ts';
 import { db } from '../../state/db.ts';
 import { useInventoryStore } from '../../state/inventory.ts';
 import { useLibraryStore } from '../../state/library.ts';
+import { MAX_KAMERA_BYTES } from '../readFile.ts';
+import { fakeSizedFile } from '../testFile.ts';
 import { InventoryPage } from './InventoryPage.tsx';
 
 beforeEach(async () => {
@@ -294,6 +296,19 @@ describe('InventoryPage', () => {
     await user.upload(screen.getByLabelText(/import echoes file/i), file);
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/not a JSON file/i);
+    expect(await db.ownedEchoes.count()).toBe(0);
+  });
+
+  it('refuses an oversized import file before reading it', async () => {
+    const user = userEvent.setup();
+    render(<InventoryPage />);
+    await screen.findByText(/no echoes yet/i);
+
+    const { file, text } = fakeSizedFile(MAX_KAMERA_BYTES + 1, 'echoes.json');
+    await user.upload(screen.getByLabelText(/import echoes file/i), file);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/over the 8\.0 MB limit for an Echo import/);
+    expect(text).not.toHaveBeenCalled();
     expect(await db.ownedEchoes.count()).toBe(0);
   });
 

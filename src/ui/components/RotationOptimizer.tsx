@@ -138,6 +138,17 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
     );
   };
 
+  /**
+   * `handle.cancel()` never settles its promise, so bumping `runCounter` is
+   * what makes the run's late progress/result/error callbacks no-ops.
+   */
+  const handleCancel = (): void => {
+    runRef.current?.cancel();
+    runRef.current = null;
+    runCounter.current += 1;
+    setStatus({ kind: 'idle' });
+  };
+
   /** Slot order for apply/save: winning main echo first (slot 1), rest sorted. */
   const slotOrder = (echoIds: string[], mainEchoId: string | undefined): [string, string, string, string, string] => {
     const rest = echoIds.filter((id) => id !== mainEchoId).sort();
@@ -248,15 +259,22 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
           Searching {candidates.length.toLocaleString()} of {echoes.length.toLocaleString()} echoes.
           {tooFewCandidates && ' Loosen the filters: at least 5 are needed.'}
         </p>
-        <button
-          type="button"
-          onClick={handleRun}
-          disabled={!canRun}
-          title={blocks.length === 0 ? 'Add rotation actions first' : undefined}
-          className={`${btnPrimary} mt-3 w-full px-5 py-2 sm:w-auto`}
-        >
-          Find best builds
-        </button>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handleRun}
+            disabled={!canRun}
+            title={blocks.length === 0 ? 'Add rotation actions first' : undefined}
+            className={`${btnPrimary} w-full px-5 py-2 sm:w-auto`}
+          >
+            Find best builds
+          </button>
+          {status.kind === 'running' && (
+            <button type="button" onClick={handleCancel} className={`${btnOutline} px-5 py-2`}>
+              Cancel
+            </button>
+          )}
+        </div>
         </>
       )}
 

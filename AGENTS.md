@@ -422,6 +422,11 @@ interface Team {
   `equippedTo`, `locked`, `origin` or `id`). `replaceEcho` replaces every
   form-owned field, so an absent optional one is cleared, and keeps those
   four from the stored row. A new Echo starts unequipped.
+  - A substat's `rolls` (the form never shows it) is kept when the edit
+    submits the same stat with the same value (within 1e-9: the form
+    round-trips values through display text). A changed value or a new
+    stat has none. Nothing in the app writes `rolls`; it only arrives
+    through a backup or pasted JSON.
 - **Def checks use the active snapshot.** `state/inventory.ts` and
   `EchoForm` read `useSnapshotStore`, never `loadBundledSnapshot()`. Only
   `data/`, `snapshotStore`, the dev seed and the Database page's bundled
@@ -497,8 +502,11 @@ interface Team {
   - A page test that expects a toast must render `<ToastHost />`.
 - **Builds page detail.** A saved own build's card expands (`BuildDetail`)
   to its five Echoes as they are in the inventory now, plus the weapon and
-  the saved enemy, Resonance Mode and minimum stats. A deleted Echo is
-  marked in its slot and on the card. Reference builds have no detail view.
+  the saved enemy, Resonance Mode and minimum stats. A deleted
+  Echo is marked in its slot and on the card. A reference build expands
+  (`ReferenceBuildDetail`) to its saved payload on `SharedBuildCard`
+  (`hideTitle`), with `viewSharedBuild` computed only while open. It never
+  resolves against the inventory, so nothing is marked missing.
 - UI dynamics: live-feedback primitives in `src/ui/components/feedback.tsx` +
   `src/ui/toasts.ts`, motion hooks in `src/ui/motion.ts` (`useAnimatedNumber`,
   `useReveal` for scroll-in Windows, `useTypewriter` for the mascot bubble), command palette in

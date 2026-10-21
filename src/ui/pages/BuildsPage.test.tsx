@@ -214,13 +214,32 @@ describe('BuildsPage', () => {
       }
     });
 
-    it('offers no details for a saved reference build (it has its own Echoes)', async () => {
+    it('opens a saved reference build to its own five Echoes, with no inventory lookups', async () => {
+      const user = userEvent.setup();
       await useLibraryStore.getState().importBuilds([referenceBuildFrom(sharedPayload)]);
       render(<BuildsPage />);
       await screen.findByText('Friend Jiyan');
       expect(screen.getByText('reference')).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: /show details/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('region', { name: /details for friend jiyan/i })).not.toBeInTheDocument();
+      const toggle = screen.getByRole('button', { name: /show details for friend jiyan/i });
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+      await user.click(toggle);
+      expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      const region = screen.getByRole('region', { name: /details for friend jiyan/i });
+      expect(toggle).toHaveAttribute('aria-controls', region.id);
+      const rows = within(within(region).getByRole('list', { name: 'Shared Echoes' })).getAllByRole('listitem');
+      expect(rows).toHaveLength(5);
+      expect(rows[0]).toHaveTextContent(/Slot 1 \(main\) · Feilian Beringal/);
+      expect(rows[0]).toHaveTextContent('Crit Rate 22%');
+      expect(rows[4]).toHaveTextContent('Chirpuff');
+      expect(region).toHaveTextContent(/Jiyan Lv 90 · S6/);
+      // The list row already shows the name; the opened card doesn't repeat it.
+      expect(within(region).queryByText('Friend Jiyan')).not.toBeInTheDocument();
       expect(screen.queryByText(/missing/i)).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /hide details for friend jiyan/i }));
+      expect(screen.queryByRole('region', { name: /details for friend jiyan/i })).not.toBeInTheDocument();
     });
   });
 

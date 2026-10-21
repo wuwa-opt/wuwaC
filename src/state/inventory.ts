@@ -26,6 +26,22 @@ export type EchoDraft = Omit<OwnedEcho, 'id' | 'origin' | 'equippedTo'> & {
  */
 export type EchoFormDraft = Omit<EchoDraft, 'equippedTo' | 'locked'>;
 
+/**
+ * An edit's substats, with each one's stored `rolls` carried over when it is
+ * the same roll: same stat, and a value equal up to float noise (the form
+ * round-trips values through display text, which can move the last digit).
+ * A changed value or a new stat gets none, since the roll count no longer
+ * describes it. A `rolls` the caller submits itself is kept as given.
+ */
+function keepRolls(submitted: OwnedEcho['substats'], stored: OwnedEcho['substats']): OwnedEcho['substats'] {
+  return submitted.map((sub) => {
+    if (sub.rolls !== undefined) return sub;
+    const before = stored.find((s) => s.stat === sub.stat);
+    if (before?.rolls === undefined || Math.abs(before.value - sub.value) > 1e-9) return sub;
+    return { ...sub, rolls: before.rolls };
+  });
+}
+
 /** Row-level def problems. `orphan` = unknown def; the rest = known-def mismatch. */
 export interface EchoDefIssue {
   kind: 'orphan' | 'cost' | 'sonata' | 'mainStat';
@@ -77,7 +93,9 @@ interface InventoryState {
   /**
    * Save an edit from the Echo form: `fields` replace every form-owned field
    * (an absent optional one is cleared), and the row keeps its `id`, `origin`,
-   * `equippedTo` and `locked` whatever the caller passes.
+   * `equippedTo` and `locked` whatever the caller passes. A substat with the
+   * same stat and value as a stored one keeps its `rolls` (the form never
+   * shows them); a changed value or a new stat has none.
    */
   replaceEcho: (id: string, fields: EchoFormDraft) => Promise<OwnedEcho>;
   /** Delete one Echo; resolves to the exact row removed (for undo). Throws on an unknown or locked id. */
@@ -173,6 +191,7 @@ export const useInventoryStore = create<InventoryState>()((set, get) => ({
     );
     const row = ownedEchoSchema.parse({
       ...edited,
+      substats: keepRolls(fields.substats, existing.substats),
       id,
       origin: existing.origin,
       equippedTo: existing.equippedTo,

@@ -34,10 +34,13 @@ export function SharedBuildCard({
   shared,
   view,
   snapshot,
+  hideTitle = false,
 }: {
   shared: SharedBuild;
   view: SharedBuildView;
   snapshot: Snapshot;
+  /** Leave out the icon and name, for a parent row that already shows them. */
+  hideTitle?: boolean;
 }) {
   const characterName = view.character?.name ?? shared.character.id;
   const weaponName = view.weapon?.name ?? shared.weapon.id;
@@ -50,10 +53,12 @@ export function SharedBuildCard({
   return (
     <div>
       <div className="flex flex-wrap items-center gap-3">
-        <GameIcon name={characterName} iconUrl={view.character?.iconUrl} />
+        {!hideTitle && <GameIcon name={characterName} iconUrl={view.character?.iconUrl} />}
         <div className="min-w-0 flex-1 basis-52">
-          <p className="truncate font-display text-xl leading-tight font-semibold text-ink">{shared.name}</p>
-          <p className="mt-0.5 text-xs text-fog tnum">
+          {!hideTitle && (
+            <p className="truncate font-display text-xl leading-tight font-semibold text-ink">{shared.name}</p>
+          )}
+          <p className={`${hideTitle ? '' : 'mt-0.5 '}text-xs text-fog tnum`}>
             {characterName} Lv {shared.character.level} · S{shared.character.chain} · {weaponName} Lv{' '}
             {shared.weapon.level} R{shared.weapon.rank}
           </p>

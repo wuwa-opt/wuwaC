@@ -8,6 +8,8 @@ import { loadBundledSnapshot } from '../../data/index.ts';
 import { db } from '../../state/db.ts';
 import { resetSnapshotStoreForTests } from '../../state/snapshotStore.ts';
 import { DatabasePage } from './DatabasePage.tsx';
+import { ToastHost } from '../components/ToastHost.tsx';
+import { resetToastsForTests } from '../toasts.ts';
 
 /**
  * Database freshness affordance: which snapshot is active (cached vs
@@ -39,25 +41,26 @@ function servePublication(snapshot: unknown, { failFirst = false } = {}): void {
 }
 
 beforeEach(async () => {
+  resetToastsForTests();
   await db.gamedataCache.clear();
   resetSnapshotStoreForTests();
 });
 
 describe('DatabasePage freshness', () => {
   it('shows the bundled source pill with an empty cache', async () => {
-    render(<DatabasePage />);
+    render(<><DatabasePage /><ToastHost /></>);
     expect(await screen.findByText(/^Bundled · /)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /check for updates/i })).toBeInTheDocument();
   });
 
   it('shows the cached source pill when a usable cache wins', async () => {
     await writeCachedSnapshot({ ...loadBundledSnapshot(), fetchedAt: '2026-10-02T00:00:00.000Z' });
-    render(<DatabasePage />);
+    render(<><DatabasePage /><ToastHost /></>);
     expect(await screen.findByText('Cached · 2026-10-02')).toBeInTheDocument();
   });
 
   it('renders content synchronously from the seed (no loading flash)', () => {
-    render(<DatabasePage />);
+    render(<><DatabasePage /><ToastHost /></>);
     // First paint already lists entries — the cache resolves in place.
     expect(screen.getByText('Jiyan')).toBeInTheDocument();
     expect(screen.queryByText(/loading/i)).not.toBeInTheDocument();
@@ -65,7 +68,7 @@ describe('DatabasePage freshness', () => {
 
   it('manual check offline toasts and keeps serving the current snapshot', async () => {
     const user = userEvent.setup();
-    render(<DatabasePage />);
+    render(<><DatabasePage /><ToastHost /></>);
     await screen.findByText(/^Bundled · /);
 
     await user.click(screen.getByRole('button', { name: /check for updates/i }));
@@ -78,7 +81,7 @@ describe('DatabasePage freshness', () => {
   it('manual check reports up to date when the publication matches', async () => {
     servePublication(loadBundledSnapshot());
     const user = userEvent.setup();
-    render(<DatabasePage />);
+    render(<><DatabasePage /><ToastHost /></>);
     await screen.findByText(/^Bundled · /);
 
     await user.click(screen.getByRole('button', { name: /check for updates/i }));
@@ -98,7 +101,7 @@ describe('DatabasePage freshness', () => {
 
   it('adopts a newer publication in the background on first visit', async () => {
     servePublication(newerPublication());
-    render(<DatabasePage />);
+    render(<><DatabasePage /><ToastHost /></>);
     expect(await screen.findByText('Testina')).toBeInTheDocument();
     expect(screen.getByText(/^Cached · /)).toBeInTheDocument();
     expect(screen.queryByText('Jiyan')).not.toBeInTheDocument();
@@ -107,7 +110,7 @@ describe('DatabasePage freshness', () => {
   it('manual check adopts a newer publication live', async () => {
     servePublication(newerPublication(), { failFirst: true });
     const user = userEvent.setup();
-    render(<DatabasePage />);
+    render(<><DatabasePage /><ToastHost /></>);
     await screen.findByText(/^Bundled · /);
 
     await user.click(screen.getByRole('button', { name: /check for updates/i }));

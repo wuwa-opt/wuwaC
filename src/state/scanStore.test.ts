@@ -3,6 +3,8 @@ import type { OwnedEcho } from '../data/schema.ts';
 import fixtures from '../scanner/fixtures/panels.json';
 import type { OcrWord } from '../scanner/parse.ts';
 import { reviewRows, summarize } from '../scanner/review.ts';
+import { screenshotProblem } from '../scanner/imageLimits.ts';
+import { pngBytes } from '../scanner/testImages.ts';
 import { setScanDeps, useScanStore } from './scanStore.ts';
 
 type RawPanel = { frame: number[]; words: (string | number)[][] };
@@ -88,6 +90,44 @@ describe('scan store', () => {
     await useScanStore.getState().addImages([file('2026-10-16_16-56-49')]);
     expect(useScanStore.getState().engine).toBe('ready');
     expect(useScanStore.getState().items[1].status).toBe('done');
+  });
+});
+
+describe('screenshot limits in the scan store', () => {
+  it('fails an oversized file on its own row and still reads the rest of the batch', async () => {
+    const reads: string[] = [];
+    setScanDeps({
+      validate: screenshotProblem,
+      createReader: () => Promise.resolve((image) => {
+        reads.push((image as File).name);
+        return fakeReader(image);
+      }),
+      thumbnail: () => Promise.resolve(null),
+    });
+    const good = new File([pngBytes(1920, 1080)], '2026-10-16_16-56-49', { type: 'image/png' });
+    const eightK = new File([pngBytes(7680, 4320)], 'eightk.png', { type: 'image/png' });
+    const heavy = new File([pngBytes(1920, 1080)], 'heavy.png', { type: 'image/png' });
+    Object.defineProperty(heavy, 'size', { value: 30 * 1024 * 1024 });
+    const store = useScanStore.getState();
+    store.setBatch({ sonataId: 'flamewing-s-shadow' });
+    await store.addImages([eightK, good, heavy]);
+
+    const [a, b, c] = useScanStore.getState().items;
+    expect(a).toMatchObject({ fileName: 'eightk.png', status: 'failed' });
+    expect(a.error).toMatch(/7680×4320.*over the 16 MP limit/);
+    expect(b.status).toBe('done');
+    expect(c).toMatchObject({ fileName: 'heavy.png', status: 'failed' });
+    expect(c.error).toMatch(/30\.0 MB, over the 20\.0 MB limit/);
+    // Refused files never reach the OCR engine.
+    expect(reads).toEqual(['2026-10-16_16-56-49']);
+  });
+
+  it('fails a non-image the same way instead of throwing', async () => {
+    setScanDeps({ validate: screenshotProblem, createReader: () => Promise.resolve(fakeReader), thumbnail: () => Promise.resolve(null) });
+    const store = useScanStore.getState();
+    store.setBatch({ sonataId: 'flamewing-s-shadow' });
+    await store.addImages([new File(['not an image'], 'notes.png', { type: 'image/png' })]);
+    expect(useScanStore.getState().items[0]).toMatchObject({ status: 'failed', error: 'notes.png is not a PNG, JPEG or WebP image.' });
   });
 });
 

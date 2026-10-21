@@ -1,8 +1,30 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { useToasts } from './toasts.ts';
+import {
+  dismissToast,
+  dismissToastScope,
+  holdToast,
+  pushToast,
+  resetToastsForTests,
+  useToastStore,
+  type PushOptions,
+  type Toast,
+} from './toasts.ts';
+
+/** The toast store with a per-test default delay, shaped like the hook the first version of these tests used. */
+function useToasts(defaultMs: number) {
+  const toasts = useToastStore((s) => s.toasts);
+  return {
+    toasts,
+    push: (message: string, tone?: Toast['tone'], options: PushOptions = {}) =>
+      pushToast(message, tone, { timeoutMs: defaultMs, ...options }),
+    dismiss: dismissToast,
+    hold: holdToast,
+  };
+}
 
 afterEach(() => {
+  resetToastsForTests();
   vi.useRealTimers();
 });
 
@@ -117,5 +139,54 @@ describe('useToasts', () => {
       vi.advanceTimersByTime(1000);
     });
     expect(result.current.toasts).toHaveLength(0);
+  });
+});
+
+describe('toast store (shared across pages)', () => {
+  it('outlives the component that pushed it, and keeps counting down', () => {
+    vi.useFakeTimers();
+    const page = renderHook(() => useToasts(1000));
+    act(() => {
+      page.result.current.push('Deleted.', 'success', { timeoutMs: 10_000 });
+    });
+    page.unmount(); // the page the toast came from is gone
+    const host = renderHook(() => useToastStore((s) => s.toasts));
+    expect(host.result.current.map((t) => t.message)).toEqual(['Deleted.']);
+    act(() => {
+      vi.advanceTimersByTime(9999);
+    });
+    expect(host.result.current).toHaveLength(1);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(host.result.current).toHaveLength(0);
+  });
+
+  it('keeps an action callable after the pusher unmounts', () => {
+    const onAction = vi.fn();
+    const page = renderHook(() => useToasts(1000));
+    act(() => {
+      page.result.current.push('Gone.', 'success', { action: { label: 'Undo', onAction } });
+    });
+    page.unmount();
+    useToastStore.getState().toasts[0].action?.onAction();
+    expect(onAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows at most three, and drops the timer of one pushed out', () => {
+    vi.useFakeTimers();
+    for (const m of ['a', 'b', 'c', 'd']) pushToast(m);
+    expect(useToastStore.getState().toasts.map((t) => t.message)).toEqual(['b', 'c', 'd']);
+    expect(vi.getTimerCount()).toBe(3);
+  });
+
+  it('dismisses a whole scope and nothing else', () => {
+    vi.useFakeTimers();
+    pushToast('undo 1', 'success', { scope: 'inventory-undo' });
+    pushToast('other');
+    pushToast('undo 2', 'success', { scope: 'inventory-undo' });
+    dismissToastScope('inventory-undo');
+    expect(useToastStore.getState().toasts.map((t) => t.message)).toEqual(['other']);
+    expect(vi.getTimerCount()).toBe(1);
   });
 });

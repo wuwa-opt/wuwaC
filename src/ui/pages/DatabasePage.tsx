@@ -13,9 +13,8 @@ import { statLabel, toDisplayValue } from '../format.ts';
 import { DataSafety } from '../components/DataSafety.tsx';
 import { GameIcon } from '../components/GameIcon.tsx';
 import { btnOutline, inputClass, labelClass } from '../components/classes.ts';
-import { ToastStack } from '../components/feedback.tsx';
 import { AttributeDot, PageHeader } from '../components/ui.tsx';
-import { useToasts } from '../toasts.ts';
+import { pushToast } from '../toasts.ts';
 
 type Tab = 'characters' | 'weapons' | 'echoes' | 'sonatas';
 
@@ -184,7 +183,6 @@ export function DatabasePage() {
   const [tab, setTab] = useState<Tab>('characters');
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
 
   useEffect(() => {
     void ensureSnapshotLoaded();
@@ -424,7 +422,6 @@ export function DatabasePage() {
         Game data synced from the encore.moe community API, reviewed, and published with this site. Fan-made
         tool, not affiliated with or endorsed by Kuro Games.
       </p>
-      <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </section>
   );
 }

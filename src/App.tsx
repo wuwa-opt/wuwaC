@@ -5,6 +5,7 @@ import { CommandPalette } from './ui/components/palette.tsx';
 import { ErrorBoundary } from './ui/components/ErrorBoundary.tsx';
 import { ImportHint } from './ui/components/ImportHint.tsx';
 import { Skeleton } from './ui/components/feedback.tsx';
+import { ToastHost } from './ui/components/ToastHost.tsx';
 import { Mascot } from './ui/components/Mascot.tsx';
 import { MovedBanner } from './ui/components/MovedBanner.tsx';
 import { PixelIcon } from './ui/components/PixelIcon.tsx';
@@ -239,6 +240,7 @@ function App() {
         </p>
       </main>
       <BottomTabs />
+      <ToastHost />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );

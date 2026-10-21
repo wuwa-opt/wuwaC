@@ -9,7 +9,7 @@ import { Alert, CostPips } from './ui.tsx';
 /** Ratio for display at one decimal ("67.1%"); presentation only. */
 const pct = (value: number): string => `${(value * 100).toFixed(1)}%`;
 
-function StatValue({ stat, value, flag }: { stat: StatKey; value: number; flag?: EchoValueFlag }) {
+export function StatValue({ stat, value, flag }: { stat: StatKey; value: number; flag?: EchoValueFlag }) {
   const text = `${statLabel(stat)} ${formatStatValue(stat, value)}`;
   if (flag === undefined) return <span>{text}</span>;
   const out = flag.severity === 'out-of-range';

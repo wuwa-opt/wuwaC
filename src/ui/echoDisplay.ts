@@ -1,5 +1,5 @@
 import { findEchoDef } from '../data/index.ts';
-import type { OwnedEcho, Snapshot } from '../data/schema.ts';
+import type { Build, OwnedEcho, Snapshot } from '../data/schema.ts';
 import { echoRollValue } from '../domain/rollValue.ts';
 
 export function sonataName(snapshot: Snapshot, sonataId: string): string {
@@ -10,6 +10,12 @@ export function sonataName(snapshot: Snapshot, sonataId: string): string {
 export function echoDisplayName(snapshot: Snapshot, echo: OwnedEcho): string {
   if (echo.label) return echo.label;
   return findEchoDef(snapshot, echo.echoDefId)?.name ?? echo.echoDefId;
+}
+
+/** Echoes of an own build that are no longer in the inventory, per slot (slot 1 first). */
+export function missingSlots(build: Build, inventory: readonly OwnedEcho[]): number[] {
+  const owned = new Set(inventory.map((e) => e.id));
+  return build.echoIds.flatMap((id, slot) => (owned.has(id) ? [] : [slot]));
 }
 
 /** Roll value of an echo, or null when none of its substats are tiered. */

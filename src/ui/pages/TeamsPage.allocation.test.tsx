@@ -9,6 +9,8 @@ import { useLibraryStore } from '../../state/library.ts';
 import { useRosterStore } from '../../state/roster.ts';
 import { useSnapshotStore } from '../../state/snapshotStore.ts';
 import { useTeamStore } from '../../state/teamStore.ts';
+import { ToastHost } from '../components/ToastHost.tsx';
+import { resetToastsForTests } from '../toasts.ts';
 
 // jsdom has no Worker: run the same exact search inline, through the same entry point.
 vi.mock('../../optimizer/worker.ts', async () => {
@@ -61,6 +63,7 @@ const echo = (i: number): OwnedEcho => ({
 });
 
 beforeEach(async () => {
+  resetToastsForTests();
   await Promise.all([db.builds.clear(), db.teams.clear(), db.roster.clear(), db.ownedEchoes.clear()]);
   await db.ownedEchoes.bulkAdd(Array.from({ length: 15 }, (_, i) => echo(i + 1)));
   await db.teams.add(team);
@@ -76,7 +79,7 @@ beforeEach(async () => {
 describe('TeamsPage allocation', () => {
   it('allocates, saves as builds, and Undo removes exactly those builds', async () => {
     const user = userEvent.setup();
-    render(<TeamsPage />);
+    render(<><TeamsPage /><ToastHost /></>);
     await user.click(await screen.findByRole('button', { name: /allocate echoes across this team/i }));
     const run = screen.getByRole('button', { name: 'Allocate Echoes' });
     await waitFor(() => expect(run).toBeEnabled());
@@ -98,7 +101,7 @@ describe('TeamsPage allocation', () => {
     // x1..x5 start on jiyan; the allocation hands them to yangyang.
     await db.ownedEchoes.bulkPut([1, 2, 3, 4, 5].map((i) => ({ ...echo(i), equippedTo: 'jiyan' })));
     const user = userEvent.setup();
-    render(<TeamsPage />);
+    render(<><TeamsPage /><ToastHost /></>);
     await user.click(await screen.findByRole('button', { name: /allocate echoes across this team/i }));
     const run = screen.getByRole('button', { name: 'Allocate Echoes' });
     await waitFor(() => expect(run).toBeEnabled());
@@ -123,7 +126,7 @@ describe('TeamsPage allocation', () => {
 
   it('Undo skips an Echo that was moved after marking', async () => {
     const user = userEvent.setup();
-    render(<TeamsPage />);
+    render(<><TeamsPage /><ToastHost /></>);
     await user.click(await screen.findByRole('button', { name: /allocate echoes across this team/i }));
     const run = screen.getByRole('button', { name: 'Allocate Echoes' });
     await waitFor(() => expect(run).toBeEnabled());
@@ -142,7 +145,7 @@ describe('TeamsPage allocation', () => {
 
   it('drops the pending Undo when the inventory is reloaded', async () => {
     const user = userEvent.setup();
-    render(<TeamsPage />);
+    render(<><TeamsPage /><ToastHost /></>);
     await user.click(await screen.findByRole('button', { name: /allocate echoes across this team/i }));
     const run = screen.getByRole('button', { name: 'Allocate Echoes' });
     await waitFor(() => expect(run).toBeEnabled());
@@ -163,7 +166,7 @@ describe('TeamsPage allocation', () => {
       within(screen.getByRole('list', { name: 'Priority order' }))
         .getAllByRole('listitem')
         .map((li) => li.textContent?.match(/^\d\.(\w+)/)?.[1]);
-    const view = render(<TeamsPage />);
+    const view = render(<><TeamsPage /><ToastHost /></>);
     await user.click(await screen.findByRole('button', { name: /allocate echoes across this team/i }));
     await user.click(screen.getByRole('button', { name: 'Move Yangyang up' }));
     await waitFor(async () => expect((await db.teams.get('t1'))?.priority).toEqual(['jiyan', 'yangyang', 'verina']));
@@ -171,7 +174,7 @@ describe('TeamsPage allocation', () => {
 
     // A fresh page load: stores empty, everything re-read from IndexedDB.
     useTeamStore.setState({ teams: [], loaded: false });
-    const reloaded = render(<TeamsPage />);
+    const reloaded = render(<><TeamsPage /><ToastHost /></>);
     await user.click(await screen.findByRole('button', { name: /allocate echoes across this team/i }));
     expect(names()).toEqual(['Jiyan', 'Yangyang', 'Verina']);
 
@@ -180,7 +183,7 @@ describe('TeamsPage allocation', () => {
     });
     expect((await db.teams.get('t1'))?.priority).toBeUndefined();
     reloaded.unmount();
-    render(<TeamsPage />);
+    render(<><TeamsPage /><ToastHost /></>);
     await user.click(await screen.findByRole('button', { name: /allocate echoes across this team/i }));
     expect(names()).toEqual(['Jiyan', 'Verina', 'rover']); // team order again ('rover' isn't in the data, so shown by id)
   });

@@ -9,7 +9,15 @@ import {
   Skeleton,
   ToastStack,
 } from './feedback.tsx';
-import { useToasts } from '../toasts.ts';
+import { dismissToast, holdToast, pushToast, resetToastsForTests, useToastStore } from '../toasts.ts';
+
+/** The shared toast store, shaped like the page-local hook these tests were written for. */
+function useToasts() {
+  const toasts = useToastStore((s) => s.toasts);
+  return { toasts, push: pushToast, dismiss: dismissToast, hold: holdToast };
+}
+
+afterEach(() => resetToastsForTests());
 
 describe('AnimatedNumber', () => {
   it('renders the formatted target on first paint', () => {

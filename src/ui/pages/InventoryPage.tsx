@@ -18,8 +18,8 @@ import { EchoStatus } from '../components/EchoStatus.tsx';
 import { EchoTable } from '../components/EchoTable.tsx';
 import { Mascot } from '../components/Mascot.tsx';
 import { btnDangerGhost, btnGhost, btnOutline, btnPrimary, inputClass } from '../components/classes.ts';
-import { AnimatedNumber, Skeleton, ToastStack } from '../components/feedback.tsx';
-import { UNDO_TOAST_MS, useToasts } from '../toasts.ts';
+import { AnimatedNumber, Skeleton } from '../components/feedback.tsx';
+import { dismissToast, INVENTORY_UNDO_SCOPE, pushToast, UNDO_TOAST_MS } from '../toasts.ts';
 import { usePrefersReducedMotion, useTypewriter } from '../motion.ts';
 import { Alert, CostPips, EmptyState, PageHeader, Window } from '../components/ui.tsx';
 import { inventorySummary } from '../echoDisplay.ts';
@@ -87,12 +87,11 @@ export function InventoryPage() {
   const loaded = useInventoryStore((s) => s.loaded);
   const load = useInventoryStore((s) => s.load);
   const addEcho = useInventoryStore((s) => s.addEcho);
-  const updateEcho = useInventoryStore((s) => s.updateEcho);
+  const replaceEcho = useInventoryStore((s) => s.replaceEcho);
   const removeEcho = useInventoryStore((s) => s.removeEcho);
   const removeEchoes = useInventoryStore((s) => s.removeEchoes);
   const setLocked = useInventoryStore((s) => s.setLocked);
   const restoreEchoes = useInventoryStore((s) => s.restoreEchoes);
-  const generation = useInventoryStore((s) => s.generation);
   const importEchoes = useInventoryStore((s) => s.importEchoes);
   const [adding, setAdding] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -106,11 +105,8 @@ export function InventoryPage() {
   const [transferError, setTransferError] = useState<string | null>(null);
   // Bulk-delete confirmation: the ids shown, valid only for the filters they were shown under.
   const [fodderConfirm, setFodderConfirm] = useState<{ ids: string[]; filterKey: string } | null>(null);
-  const { toasts, push: pushToast, dismiss: dismissToast, hold: holdToast } = useToasts();
   const fileRef = useRef<HTMLInputElement>(null);
   const statusRef = useRef<HTMLDivElement>(null);
-  // Undo toasts and the inventory generation they were issued under (undo is in memory only).
-  const undoToasts = useRef(new Set<number>());
   const reducedMotion = usePrefersReducedMotion();
 
   const snapshot = useSnapshotStore((s) => s.snapshot);
@@ -128,13 +124,6 @@ export function InventoryPage() {
   useEffect(() => {
     if (!buildsLoaded) void loadBuilds();
   }, [buildsLoaded, loadBuilds]);
-
-  // A reload (backup restore, first load) invalidates every pending undo offer.
-  useEffect(() => {
-    for (const id of undoToasts.current) dismissToast(id);
-    undoToasts.current.clear();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire on generation change only
-  }, [generation]);
 
   // Derived, never stored. Until the library loads every unequipped Echo would read as unused.
   const usage = useMemo(
@@ -205,11 +194,12 @@ export function InventoryPage() {
     const issuedAt = useInventoryStore.getState().generation;
     const id = pushToast(message, 'success', {
       timeoutMs: UNDO_TOAST_MS,
+      // Outlives this page; ToastHost drops it when a reload (backup restore) invalidates it.
+      scope: INVENTORY_UNDO_SCOPE,
       action: {
         label: 'Undo',
         onAction: () => {
           dismissToast(id);
-          undoToasts.current.delete(id);
           if (useInventoryStore.getState().generation !== issuedAt) return;
           restoreEchoes(rows)
             .then(({ restored, skipped }) => {
@@ -220,11 +210,10 @@ export function InventoryPage() {
                   : `Restored ${noun(restored.length)}; ${noun(skipped.length)} already back, left as is.`,
               );
             })
-            .catch((err: unknown) => setTransferError(err instanceof Error ? err.message : 'Undo failed.'));
+            .catch((err: unknown) => pushToast(err instanceof Error ? err.message : 'Undo failed.', 'danger'));
         },
       },
     });
-    undoToasts.current.add(id);
   };
 
   const deleteSafeFodder = (shownIds: readonly string[]): void => {
@@ -466,7 +455,7 @@ export function InventoryPage() {
             initial={toFormValues(editing)}
             submitLabel="Save"
             onSubmit={async (draft) => {
-              await updateEcho(editing.id, draft);
+              await replaceEcho(editing.id, draft);
               setEditing(null);
               pushToast('Echo saved.');
             }}
@@ -667,7 +656,6 @@ export function InventoryPage() {
         />
         </div>
       </div>
-      <ToastStack toasts={toasts} onDismiss={dismissToast} onHold={holdToast} />
     </section>
   );
 }

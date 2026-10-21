@@ -17,10 +17,12 @@ import {
 import { useAppStore } from '../../state/store.ts';
 import { downloadBlob } from '../download.ts';
 import { GameIcon } from '../components/GameIcon.tsx';
+import { BuildDetail } from '../components/BuildDetail.tsx';
+import { missingSlots } from '../echoDisplay.ts';
 import { SharedBuildCard } from '../components/SharedBuildCard.tsx';
 import { btnDangerGhost, btnGhost, btnOutline, btnPrimary, inputClass, labelClass } from '../components/classes.ts';
-import { Skeleton, ToastStack } from '../components/feedback.tsx';
-import { useToasts } from '../toasts.ts';
+import { Skeleton } from '../components/feedback.tsx';
+import { pushToast } from '../toasts.ts';
 import { Alert, EmptyState, PageHeader, Window } from '../components/ui.tsx';
 
 type SharedState =
@@ -52,9 +54,10 @@ export function BuildsPage() {
   const [paste, setPaste] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
   /** Per-build "include rotation" toggle for Copy link (default off: it's large). */
   const [withRotation, setWithRotation] = useState<Record<string, boolean>>({});
+  /** Builds whose detail (Echoes, weapon, run settings) is open. */
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!loaded) void load();
@@ -321,7 +324,12 @@ export function BuildsPage() {
           <EmptyState>No saved builds yet — save one from the Calculator results.</EmptyState>
         ) : (
           <ul className="space-y-2">
-            {builds.map((build) => (
+            {builds.map((build) => {
+              const own = !isReferenceBuild(build);
+              const open = own && expanded[build.id] === true;
+              // Only judged once the inventory is in; before that nothing is "missing".
+              const missing = own && inventoryLoaded ? missingSlots(build, inventory) : [];
+              return (
               <li key={build.id} className="animate-tt-fade row-sweep px-card bg-panel px-4 py-3 transition-terminal">
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="flex min-w-0 flex-1 basis-52 items-center gap-3">
@@ -347,6 +355,17 @@ export function BuildsPage() {
                             </span>
                           </>
                         )}
+                        {missing.length > 0 && (
+                          <>
+                            {' · '}
+                            <span
+                              className="px-tag px-1.5 py-px text-xs text-ember-ink"
+                              title={`Deleted from your inventory: ${missing.map((slot) => `slot ${slot + 1}`).join(', ')}`}
+                            >
+                              {missing.length} Echo{missing.length === 1 ? '' : 'es'} missing
+                            </span>
+                          </>
+                        )}
                       </p>
                     </div>
                   </div>
@@ -364,6 +383,18 @@ export function BuildsPage() {
                       />
                       + rotation
                     </label>
+                    {own && (
+                      <button
+                        type="button"
+                        aria-expanded={open}
+                        aria-controls={`build-detail-${build.id}`}
+                        aria-label={`${open ? 'Hide' : 'Show'} details for ${build.name}`}
+                        onClick={() => setExpanded((m) => ({ ...m, [build.id]: !open }))}
+                        className={`${btnGhost} px-2 py-1 text-xs`}
+                      >
+                        {open ? 'Hide details' : 'Details'}
+                      </button>
+                    )}
                     <button
                       type="button"
                       disabled={!inventoryLoaded || !rosterLoaded}
@@ -381,8 +412,18 @@ export function BuildsPage() {
                     </button>
                   </div>
                 </div>
+                {open && (
+                  <BuildDetail
+                    id={`build-detail-${build.id}`}
+                    build={build}
+                    inventory={inventory}
+                    inventoryLoaded={inventoryLoaded}
+                    snapshot={snapshot}
+                  />
+                )}
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </div>
@@ -406,7 +447,6 @@ export function BuildsPage() {
           Import
         </button>
       </div>
-      <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </section>
   );
 }

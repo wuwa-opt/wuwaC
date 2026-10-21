@@ -6,8 +6,8 @@ import { GameIcon } from '../components/GameIcon.tsx';
 import { SliderField } from '../components/SliderField.tsx';
 import { btnDangerGhost, btnPrimary, inputClass, labelClass } from '../components/classes.ts';
 import { Collapsible } from '../components/Collapsible.tsx';
-import { Skeleton, ToastStack } from '../components/feedback.tsx';
-import { useToasts } from '../toasts.ts';
+import { Skeleton } from '../components/feedback.tsx';
+import { pushToast } from '../toasts.ts';
 import { AttributeDot, EmptyState, PageHeader } from '../components/ui.tsx';
 
 function defaultsFor(snapshot: Snapshot, characterId: string): RosterEntry {
@@ -35,7 +35,6 @@ export function RosterPage() {
   const snapshot = useSnapshotStore((s) => s.snapshot);
   const ensureSnapshotLoaded = useSnapshotStore((s) => s.ensureLoaded);
   const [addingId, setAddingId] = useState('');
-  const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
 
   useEffect(() => {
     if (!loaded) void load();
@@ -282,7 +281,6 @@ export function RosterPage() {
           </ul>
         )}
       </div>
-      <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </section>
   );
 }

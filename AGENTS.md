@@ -373,8 +373,10 @@ interface Team {
   `src/domain/rollValue.ts` over `SUB_STAT_TIERS`; UI only renders it.
 - Unused-Echo finder: the pure optimizer module `src/optimizer/unused.ts`
   (`findUnusedEchoes`), memoised by the Inventory page and filtered with
-  `filterByUsage` (`src/ui/filter.ts`). It is derived, never stored, and
-  shows information only (no bulk delete; the app has no undo).
+  `filterByUsage` (`src/ui/filter.ts`). It is derived, never stored.
+  Under the Safe fodder filter the Inventory page offers a bulk delete of
+  the visible fodder behind a confirm step. It re-runs the finder at click
+  time and deletes nothing if any confirmed Echo is no longer fodder.
   - **Unused**: `equippedTo === null` and in no saved non-reference build.
   - **Safe fodder**: unused, at least one saved build has an `objective`,
     and `pruneDominated` drops it for every such build (`topN: 1`,
@@ -383,6 +385,15 @@ interface Team {
   - That covers the top-1 result at minimum level 0, for the saved
     objectives only. A build that can't be checked against the current
     snapshot blocks all fodder.
+- **Delete undo.** Every Echo delete, single or bulk, shows an Undo toast
+  (10 s, paused while hovered or focused). `useInventoryStore.removeEchoes`
+  and `restoreEchoes` each run in one Dexie transaction.
+  - `restoreEchoes` takes only `removeEchoes` output. It writes those rows
+    back verbatim under the same ids, with no schema parse (`load()` never
+    validates rows), and never overwrites an id that exists again.
+  - Undo lives in memory only. It is dropped when `load()` bumps
+    `generation` (a backup restore), when the toast goes, and when the
+    page unmounts.
 - UI dynamics: live-feedback primitives in `src/ui/components/feedback.tsx` +
   `src/ui/toasts.ts`, motion hooks in `src/ui/motion.ts` (`useAnimatedNumber`,
   `useReveal` for scroll-in Windows, `useTypewriter` for the mascot bubble), command palette in

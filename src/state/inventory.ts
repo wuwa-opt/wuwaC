@@ -56,7 +56,26 @@ interface InventoryState {
   load: () => Promise<void>;
   addEcho: (draft: EchoDraft) => Promise<OwnedEcho>;
   updateEcho: (id: string, patch: Partial<EchoDraft>) => Promise<OwnedEcho>;
-  removeEcho: (id: string) => Promise<void>;
+  /** Delete one Echo; resolves to the exact row removed (for undo). Throws on an unknown id. */
+  removeEcho: (id: string) => Promise<OwnedEcho>;
+  /**
+   * Delete many Echoes in one Dexie transaction. Resolves to the exact rows
+   * removed (read inside the transaction); unknown ids are ignored. State is
+   * only touched after the transaction commits.
+   */
+  removeEchoes: (ids: readonly string[]) => Promise<OwnedEcho[]>;
+  /**
+   * Put rows from `removeEchoes` back under their original ids (so builds and
+   * `equippedTo` resolve again), in one Dexie transaction. Takes ONLY
+   * `removeEchoes` output and writes it verbatim: no schema parse, since
+   * `load()` doesn't validate rows either, so a legacy row that today's schema
+   * rejects (or carries unknown keys) must still come back unchanged.
+   * Never overwrites: a row whose id exists again (a backup restore or
+   * re-import in between) is left alone and reported in `skipped`.
+   */
+  restoreEchoes: (rows: readonly OwnedEcho[]) => Promise<{ restored: OwnedEcho[]; skipped: OwnedEcho[] }>;
+  /** Bumped by every `load()`; in-memory undo offers older than this are stale. */
+  generation: number;
   /**
    * Bulk-add pre-validated import drafts (additive — existing rows are
    * untouched). Every draft still passes the strict write path, so a bad
@@ -73,10 +92,11 @@ function toRow(draft: EchoDraft, id: string, origin = 'manual'): OwnedEcho {
 export const useInventoryStore = create<InventoryState>()((set, get) => ({
   echoes: [],
   loaded: false,
+  generation: 0,
 
   load: async () => {
     const echoes = await db.ownedEchoes.toArray();
-    set({ echoes, loaded: true });
+    set((s) => ({ echoes, loaded: true, generation: s.generation + 1 }));
   },
 
   addEcho: async (draft) => {
@@ -98,10 +118,33 @@ export const useInventoryStore = create<InventoryState>()((set, get) => ({
   },
 
   removeEcho: async (id) => {
-    const existing = get().echoes.find((e) => e.id === id);
-    if (!existing) throw new Error(`unknown echo: ${JSON.stringify(id)}`);
-    await db.ownedEchoes.delete(id);
-    set((s) => ({ echoes: s.echoes.filter((e) => e.id !== id) }));
+    const [row] = await get().removeEchoes([id]);
+    if (!row) throw new Error(`unknown echo: ${JSON.stringify(id)}`);
+    return row;
+  },
+
+  removeEchoes: async (ids) => {
+    const wanted = [...new Set(ids)];
+    const removed = await db.transaction('rw', db.ownedEchoes, async () => {
+      const found = (await db.ownedEchoes.bulkGet(wanted)).filter((row): row is OwnedEcho => row !== undefined);
+      await db.ownedEchoes.bulkDelete(found.map((row) => row.id));
+      return found;
+    });
+    const gone = new Set(removed.map((row) => row.id));
+    set((s) => ({ echoes: s.echoes.filter((e) => !gone.has(e.id)) }));
+    return removed;
+  },
+
+  restoreEchoes: async (rows) => {
+    const { restored, skipped } = await db.transaction('rw', db.ownedEchoes, async () => {
+      const present = await db.ownedEchoes.bulkGet(rows.map((row) => row.id));
+      const toAdd = rows.filter((_, i) => present[i] === undefined);
+      await db.ownedEchoes.bulkAdd(toAdd);
+      return { restored: toAdd, skipped: rows.filter((_, i) => present[i] !== undefined) };
+    });
+    const back = new Set(restored.map((row) => row.id));
+    set((s) => ({ echoes: [...s.echoes.filter((e) => !back.has(e.id)), ...restored] }));
+    return { restored, skipped };
   },
 
   importEchoes: async (drafts, origin) => {

@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Build, OwnedEcho } from '../../data/schema.ts';
 import { db } from '../../state/db.ts';
@@ -88,6 +88,37 @@ describe('InventoryPage', () => {
 
     expect(await screen.findByText(/no echoes yet/i)).toBeInTheDocument();
     expect(await db.ownedEchoes.count()).toBe(0);
+  });
+
+  it('offers Undo after a delete and puts the same row back', async () => {
+    const user = userEvent.setup();
+    render(<InventoryPage />);
+    await addEchoViaUi(user, 'Page Echo');
+    const [before] = await db.ownedEchoes.toArray();
+
+    const status = await selectEcho(user, 'Page Echo');
+    await user.click(within(status).getByRole('button', { name: /delete/i }));
+    await screen.findByText(/no echoes yet/i);
+    expect(screen.getByText('Echo deleted.')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+
+    expect(await screen.findByText('Page Echo')).toBeInTheDocument();
+    expect(screen.getByText('Restored 1 echo.')).toBeInTheDocument();
+    expect(await db.ownedEchoes.get(before.id)).toEqual(before);
+  });
+
+  it('drops the Undo offer when the inventory reloads', async () => {
+    const user = userEvent.setup();
+    render(<InventoryPage />);
+    await addEchoViaUi(user, 'Page Echo');
+    const status = await selectEcho(user, 'Page Echo');
+    await user.click(within(status).getByRole('button', { name: /delete/i }));
+    expect(await screen.findByRole('button', { name: 'Undo' })).toBeInTheDocument();
+
+    await useInventoryStore.getState().load();
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument());
   });
 
   it('shows errors and writes nothing when no Echo is picked', async () => {
@@ -468,6 +499,86 @@ describe('InventoryPage', () => {
 
       await user.selectOptions(screen.getByLabelText(/usage/i), 'all');
       expect(screen.getByText('Strong 5')).toBeInTheDocument();
+    });
+
+    describe('bulk delete', () => {
+      const spare2: OwnedEcho = { ...spare, id: 'spare2', label: 'Spare 2', mainStat: { stat: 'atkPct', value: 0.09 } };
+
+      async function openFodderFilter(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+        render(<InventoryPage />);
+        await screen.findByText('Spare');
+        await screen.findByText('2 safe fodder');
+        await user.selectOptions(screen.getByLabelText(/usage/i), 'fodder');
+      }
+
+      beforeEach(async () => {
+        await db.ownedEchoes.bulkAdd([...strong, spare, spare2, big]);
+        await db.builds.add(build);
+      });
+
+      it('is only offered under the Safe fodder filter', async () => {
+        const user = userEvent.setup();
+        render(<InventoryPage />);
+        await screen.findByText('2 safe fodder');
+        expect(screen.queryByRole('button', { name: /safe-fodder/i })).not.toBeInTheDocument();
+        await user.selectOptions(screen.getByLabelText(/usage/i), 'unused');
+        expect(screen.queryByRole('button', { name: /safe-fodder/i })).not.toBeInTheDocument();
+        await user.selectOptions(screen.getByLabelText(/usage/i), 'fodder');
+        expect(screen.getByRole('button', { name: 'Delete 2 safe-fodder Echoes' })).toBeInTheDocument();
+      });
+
+      it('confirms with the count and Undo note, deletes only fodder, and Undo makes them fodder again', async () => {
+        const user = userEvent.setup();
+        await openFodderFilter(user);
+
+        await user.click(screen.getByRole('button', { name: 'Delete 2 safe-fodder Echoes' }));
+        const confirm = screen.getByRole('group', { name: /confirm bulk delete/i });
+        expect(confirm).toHaveTextContent('Delete 2 safe-fodder Echoes?');
+        expect(confirm).toHaveTextContent(/undo button appears right after.*lost if you leave this page or reload/i);
+        expect(within(confirm).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+
+        await user.click(within(confirm).getByRole('button', { name: 'Delete 2 Echoes' }));
+
+        await waitFor(() => expect(screen.queryByText('Spare 2')).not.toBeInTheDocument());
+        expect((await db.ownedEchoes.toArray()).map((e) => e.id).sort()).toEqual(
+          ['big', 's1', 's2', 's3', 's4', 's5'],
+        );
+        expect(screen.getByText('Deleted 2 safe-fodder Echoes.')).toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: 'Undo' }));
+
+        expect(await screen.findByText('Spare 2')).toBeInTheDocument();
+        expect(screen.getByText('Spare')).toBeInTheDocument();
+        expect(await db.ownedEchoes.count()).toBe(8);
+        // Same rows, same ids: the finder tags them fodder again.
+        expect(await screen.findByRole('button', { name: 'Delete 2 safe-fodder Echoes' })).toBeInTheDocument();
+        expect(screen.getByText('2 safe fodder')).toBeInTheDocument();
+      });
+
+      it('Cancel deletes nothing', async () => {
+        const user = userEvent.setup();
+        await openFodderFilter(user);
+        await user.click(screen.getByRole('button', { name: 'Delete 2 safe-fodder Echoes' }));
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+        expect(screen.queryByRole('group', { name: /confirm bulk delete/i })).not.toBeInTheDocument();
+        expect(await db.ownedEchoes.count()).toBe(8);
+      });
+
+      it('rechecks at click time and deletes nothing if the fodder set changed', async () => {
+        const user = userEvent.setup();
+        await openFodderFilter(user);
+        await user.click(screen.getByRole('button', { name: 'Delete 2 safe-fodder Echoes' }));
+        // A build starts using Spare 2 after the confirm opened.
+        useLibraryStore.setState((s) => ({
+          builds: s.builds.map((b) => ({ ...b, echoIds: ['s1', 's2', 's3', 's4', 'spare2'] })),
+        }));
+
+        await user.click(screen.getByRole('button', { name: 'Delete 2 Echoes' }));
+
+        expect(await screen.findByText(/safe-fodder list changed/i)).toBeInTheDocument();
+        expect(await db.ownedEchoes.count()).toBe(8);
+        expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+      });
     });
 
     it('explains that safe fodder needs a saved build with an objective', async () => {

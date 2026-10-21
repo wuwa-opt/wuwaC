@@ -104,6 +104,13 @@ Never hand-copy the host into HTML or components.
   them). `pages: write`/`id-token: write` live on the deploy job only, never
   on a job that runs `npm ci`. CI also runs
   `npm audit --omit=dev --audit-level=high`.
+- **Dependabot and `main`.** One PR per major version. Gate and merge them
+  one at a time, and watch the next deploy after an Actions major (CI
+  doesn't run `deploy.yml` or `sync-gamedata.yml`). Never add a
+  `version-update:semver-major` ignore to `.github/dependabot.yml`: an
+  `ignore` rule also suppresses security updates. The ruleset
+  `protect-main` blocks force-push and deletion on `main`. Don't make a
+  check required: sync PRs opened with `GITHUB_TOKEN` never run `ci.yml`.
 - User data lives only in visitors' browsers. `state/backup.ts` is the
   whole-DB export/restore (versioned `wuwa-optimizer-backup` JSON, zod-validated);
   `state/persistence.ts` requests non-evictable storage. A new user table

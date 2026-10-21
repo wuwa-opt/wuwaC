@@ -1,6 +1,5 @@
 import type {
   CharacterData,
-  CharacterSkill,
   OwnedEcho,
   RosterEntry,
   SonataSetData,
@@ -12,8 +11,8 @@ import type { EnemyProfile } from '../domain/damage.ts';
 import type { ObjectiveSpec } from '../domain/objectives.ts';
 import type { ComputeStatsResult, StatSheet } from '../domain/stats.ts';
 import { computeStats, emptySheet, hasMainEchoBonus } from '../domain/stats.ts';
-import { resolveObjectiveSkill, scoreSheet } from '../domain/objectives.ts';
-import { pruneDominated, relevantStatsForObjective } from './prune.ts';
+import { scoreSheet } from '../domain/objectives.ts';
+import { pruneDominated, pruneInputs } from './prune.ts';
 
 /**
  * Optimizer layer: Echo-combination search (reference doc §7).
@@ -158,31 +157,18 @@ function prepare(data: SearchData, request: OptimizeRequest): Prepared {
     throw new Error(`cost budget must be 10 or 12, got ${request.costBudget}`);
   }
   const { character, weapon, roster, enemy } = data;
-  const skill =
-    request.objective.kind === 'expected-damage'
-      ? resolveObjectiveSkill(character.skills, request.objective)
-      : undefined;
-  // Pruning follows the motion's own bonus bucket (DamageList.Type), not the
-  // parent skill kind — with a skill-kind fallback for legacy specs.
-  let motionForPrune: CharacterSkill['motionValues'][number] | undefined;
-  if (request.objective.kind === 'expected-damage' && skill !== undefined) {
-    const wantedMotion = request.objective.motionName;
-    motionForPrune = skill.motionValues.find((m) => m.name === wantedMotion);
-  }
   const minEntries = Object.entries(request.minStats ?? {}) as [StatKey, number][];
-  const relevant = relevantStatsForObjective(
+  const { skill, relevantStats, isMainCarrier } = pruneInputs(
+    character,
     request.objective,
-    character.attribute,
-    motionForPrune?.dmgType ?? skill?.kind ?? 'basic',
     minEntries.map(([stat]) => stat),
-    motionForPrune?.scaling ?? skill?.scaling ?? 'ATK',
   );
 
   const { kept, pruned } = request.prune ?? true
-    ? pruneDominated(data.echoes, relevant, {
+    ? pruneDominated(data.echoes, relevantStats, {
         costBudget: request.costBudget,
         topN: request.topN,
-        isMainCarrier: (echoDefId) => hasMainEchoBonus(character.id, echoDefId),
+        isMainCarrier,
       })
     : { kept: data.echoes, pruned: [] as string[] };
 

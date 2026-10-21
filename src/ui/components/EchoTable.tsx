@@ -32,9 +32,11 @@ interface EchoTableProps {
   snapshot: Snapshot;
   selectedId: string | null;
   onSelect: (id: string) => void;
+  /** Usage tag per echo id (unused / safe fodder), from the unused-Echo finder. */
+  usageTags?: ReadonlyMap<string, 'unused' | 'fodder'>;
 }
 
-export function EchoTable({ echoes, snapshot, selectedId, onSelect }: EchoTableProps) {
+export function EchoTable({ echoes, snapshot, selectedId, onSelect, usageTags }: EchoTableProps) {
   const defs = snapshot.echoDefs;
   return (
     <div className="overflow-x-auto">
@@ -74,6 +76,7 @@ export function EchoTable({ echoes, snapshot, selectedId, onSelect }: EchoTableP
             const selected = echo.id === selectedId;
             const score = echoScore(echo);
             const others = echo.substats.filter((s) => !COLUMN_STATS.has(s.stat));
+            const usageTag = usageTags?.get(echo.id);
             return (
               <tr
                 key={echo.id}
@@ -95,6 +98,10 @@ export function EchoTable({ echoes, snapshot, selectedId, onSelect }: EchoTableP
                         {name}
                       </button>
                       <span className="text-xs text-fog">{sonataName(snapshot, echo.sonataId)}</span>
+                      {usageTag === 'fodder' && <span className="px-tag ml-2 px-1.5 py-px text-xs">fodder</span>}
+                      {usageTag === 'unused' && (
+                        <span className="ml-2 inline-flex border-2 border-line px-1.5 text-xs text-fog">unused</span>
+                      )}
                       {issues.length > 0 && (
                         <p className="text-xs text-amber">Needs re-link: {issues.map((i) => i.message).join(' ')}</p>
                       )}

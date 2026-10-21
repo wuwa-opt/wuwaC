@@ -7,7 +7,6 @@ import {
   isAllocationAborted,
   planKey,
   runAllocation,
-  type AllocationCostBudget,
   type AllocationPlan,
   type AllocationProgress,
   type AllocationResult,
@@ -80,7 +79,6 @@ export function TeamAllocation({
   const [picks, setPicks] = useState<Record<string, string>>({});
   const [modePicks, setModePicks] = useState<Record<string, ResonanceMode>>({});
   const [minLevel, setMinLevel] = useState('0');
-  const [costBudget, setCostBudget] = useState<AllocationCostBudget>(ALLOCATION_COST_BUDGET);
   const [priorityError, setPriorityError] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -123,10 +121,9 @@ export function TeamAllocation({
       members,
       echoes,
       minLevel: parsedMinLevel,
-      costBudget,
       dataStamp: `${snapshot.snapshotVersion}@${snapshot.fetchedAt}`,
     };
-  }, [resolved, echoes, minLevelValid, parsedMinLevel, costBudget, snapshot.snapshotVersion, snapshot.fetchedAt]);
+  }, [resolved, echoes, minLevelValid, parsedMinLevel, snapshot.snapshotVersion, snapshot.fetchedAt]);
   const currentKey = useMemo(() => (plan === null ? null : planKey(plan)), [plan]);
   const stale = preview !== null && preview.key !== currentKey;
   const running = status.kind === 'running';
@@ -323,10 +320,10 @@ export function TeamAllocation({
       {priorityError !== null && <p className="text-xs text-amber">{`The new order wasn't saved: ${priorityError}`}</p>}
 
       <p className="text-xs text-fog">
-        {`Builds saved with an enemy use it. The rest use the Calculator's current settings (${formatEnemy({ kind: enemyKind, level: enemyLevel, baseRES: enemyBaseRES })}), which aren't saved and reset to the defaults (mob, Lv 90, 10% RES) when the page reloads. Builds saved with minimum stats keep them, for the search and for the comparison with your equipped Echoes. Every member searches under a cost budget of ${costBudget}, the same budget your equipped Echoes are checked against, with no Sonata lock.`}
+        {`Builds saved with an enemy use it. The rest use the Calculator's current settings (${formatEnemy({ kind: enemyKind, level: enemyLevel, baseRES: enemyBaseRES })}), which aren't saved and reset to the defaults (mob, Lv 90, 10% RES) when the page reloads. Builds saved with minimum stats keep them, for the search and for the comparison with your equipped Echoes. Every member searches under a cost budget of ${ALLOCATION_COST_BUDGET}, the same budget your equipped Echoes are checked against, with no Sonata lock.`}
       </p>
 
-      <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-3">
         <div>
           <label htmlFor={`alloc-min-level-${team.id}`} className={labelClass}>Minimum echo level</label>
           <input
@@ -338,19 +335,6 @@ export function TeamAllocation({
             disabled={running}
             className={`${selectClass} mt-0.5`}
           />
-        </div>
-        <div>
-          <label htmlFor={`alloc-budget-${team.id}`} className={labelClass}>Cost budget</label>
-          <select
-            id={`alloc-budget-${team.id}`}
-            value={costBudget}
-            onChange={(e) => setCostBudget(e.target.value === '10' ? 10 : 12)}
-            disabled={running}
-            className={`${selectClass} mt-0.5`}
-          >
-            <option value={12}>12</option>
-            <option value={10}>10</option>
-          </select>
         </div>
         <div className="flex flex-wrap gap-2 sm:col-span-2">
           <button type="button" onClick={handleRun} disabled={!canRun} className={`${btnPrimary} px-5 py-2`}>
@@ -380,7 +364,7 @@ export function TeamAllocation({
           <p className="font-display text-lg font-semibold text-ink">Preview</p>
           {stale && (
             <Alert tone="warning" role="status">
-              Your inputs changed since this preview (inventory, builds, order, enemy, Resonance Mode, minimum stats, cost budget or
+              Your inputs changed since this preview (inventory, builds, order, enemy, Resonance Mode, minimum stats or
               minimum level). Run it again before saving.
             </Alert>
           )}

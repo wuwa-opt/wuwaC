@@ -266,6 +266,32 @@ describe('RotationOptimizer minimum stats', () => {
   });
 });
 
+describe('RotationOptimizer cost budget', () => {
+  it('offers no budget choice, says what layouts are searched, and always runs under 12', async () => {
+    const user = userEvent.setup();
+    run.mockReturnValue(fakeHandle().handle);
+    renderOptimizer();
+    expect(screen.queryByLabelText(/cost budget/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/in every layout up to 12 cost \(e\.g\. 4-4-1-1-1 and 4-3-3-1-1\)/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    expect(run.mock.calls[0][1].costBudget).toBe(12);
+  });
+
+  it('points at what the user can still loosen when nothing qualifies', async () => {
+    const user = userEvent.setup();
+    const fake = fakeHandle();
+    run.mockReturnValue(fake.handle);
+    renderOptimizer();
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    await act(async () => {
+      fake.resolve({ builds: [], evaluated: 0, scored: 0, total: 0, prunedEchoes: [] });
+      await fake.handle.promise;
+    });
+    expect(screen.getByText(/No valid builds — try loosening the minimum stats, the Sonata lock or the Echo filters\./)).toBeInTheDocument();
+    expect(screen.queryByText(/loosen the budget/i)).not.toBeInTheDocument();
+  });
+});
+
 describe('RotationOptimizer cancel', () => {
   const result: SearchResult = {
     builds: [{ echoIds: ['a', 'b', 'e', 'f', 'g'], score: 1000, sheet: emptySheet(), warnings: [], appliedAssumptions: [] }],

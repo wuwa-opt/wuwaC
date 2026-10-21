@@ -197,6 +197,12 @@ UI (React components)
     - Relevant stats and main-slot carriers come only from `pruneInputs`
       (`optimizer/prune.ts`), shared by `prepare()` and the unused-Echo
       finder. Never re-derive them elsewhere.
+  - **Cost budget:** the app always searches with 12 (Calculator, team
+    allocation, unused-Echo finder) and never offers 10. 12 is a cap that
+    covers every layout (4-4-1-1-1, 4-3-3-1-1, …), so a lower cap never
+    scores higher. The engine still accepts `OptimizeRequest.costBudget:
+    10 | 12` (the game caps at 10 before Data Bank upgrades, reference doc
+    §2), and its tests cover both.
 
     One dominator is unsound: several same-cost Echoes share a combo, and
     duplicate defs don't add Sonata pieces.
@@ -449,9 +455,8 @@ interface Team {
     searches the inventory minus the Echoes earlier members took. The
     priority order is saved on the Team (`Team.priority`).
   - **Pool:** it ignores `equippedTo`, keeps locked Echoes and honours a
-    minimum level. Cost budget 12 (default, `ALLOCATION_COST_BUDGET`) or
-    10, used for every step and for the baseline's legality. No Sonata
-    lock, top 1.
+    minimum level. Cost budget always 12 (`ALLOCATION_COST_BUDGET`), used
+    for every step and for the baseline's legality. No Sonata lock, top 1.
   - **Inputs:** the objective and context come from a saved build
     (`Build.objective`, `Build.context`, else the Roster entry on the same
     weapon).
@@ -469,7 +474,7 @@ interface Team {
     `runAllocation` races it against an `AbortSignal`.
   - **Stale preview:** Save is disabled when `planKey` changes: every Echo
     field except `locked`/`origin`, each member's objective, context,
-    weapon, enemy and Resonance Mode, the cost budget, the minimum level,
+    weapon, enemy and Resonance Mode, the minimum level,
     and `dataStamp` (snapshot version and `fetchedAt`).
   - **Save:** "Save as builds" is `saveBuilds` (one transaction) with an
     Undo (`removeBuilds`). Saving never writes `equippedTo`.

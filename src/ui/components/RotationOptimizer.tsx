@@ -59,7 +59,7 @@ const MIN_STAT_FIELDS: { stat: StatKey; label: string; hint?: string }[] = [
 ];
 
 /**
- * Minimal rotation optimizer: budget + Top N + run, ranked by rotation DPR
+ * Minimal rotation optimizer: Top N + run, ranked by rotation DPR
  * (DPS ranks identically — time is constant). Results apply straight into
  * the Calculator loadout or save to the build library with the full spec.
  */
@@ -70,7 +70,6 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
   } = props;
   const saveBuild = useLibraryStore((s) => s.saveBuild);
 
-  const [budget, setBudget] = useState<'10' | '12'>('12');
   const [topN, setTopN] = useState('5');
   const [lockMode, setLockMode] = useState<'none' | 'five' | 'twoPlusTwo'>('none');
   const [lockSetA, setLockSetA] = useState('');
@@ -134,7 +133,7 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
     }
     const data: SearchData = { character, weapon, roster, echoes: candidates, sonataSets, enemy, resonanceMode };
     const request: OptimizeRequest = {
-      costBudget: budget === '10' ? 10 : 12,
+      costBudget: 12,
       sonataLock:
         lockMode === 'five'
           ? { mode: 'five', setId: lockSetA }
@@ -230,14 +229,7 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
         </p>
       ) : (
         <>
-        <div className="mt-3 grid grid-cols-1 items-end gap-3 sm:grid-cols-3">
-          <div>
-            <label htmlFor="ropt-budget" className={labelClass}>Cost budget</label>
-            <select id="ropt-budget" value={budget} onChange={(e) => setBudget(e.target.value as '10' | '12')} className={`${selectClass} mt-0.5`}>
-              <option value="10">10</option>
-              <option value="12">12</option>
-            </select>
-          </div>
+        <div className="mt-3 grid grid-cols-1 items-end gap-3 sm:grid-cols-2">
           <div>
             <label htmlFor="ropt-topn" className={labelClass}>Top N</label>
             <input id="ropt-topn" value={topN} onChange={(e) => setTopN(e.target.value)} inputMode="numeric" className={`${selectClass} mt-0.5`} />
@@ -310,7 +302,8 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
           </Collapsible>
         </div>
         <p className="mt-2 text-xs text-fog tnum">
-          Searching {candidates.length.toLocaleString()} of {echoes.length.toLocaleString()} echoes.
+          Searching {candidates.length.toLocaleString()} of {echoes.length.toLocaleString()} echoes, in every layout
+          up to 12 cost (e.g. 4-4-1-1-1 and 4-3-3-1-1).
           {tooFewCandidates && ' Loosen the filters: at least 5 are needed.'}
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
@@ -345,7 +338,7 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
       {status.kind === 'done' && result && (
         <div className="mt-3">
           {result.builds.length === 0 ? (
-            <p className="text-xs text-fog">No valid builds — loosen the budget.</p>
+            <p className="text-xs text-fog">No valid builds — try loosening the minimum stats, the Sonata lock or the Echo filters.</p>
           ) : (
             <ol className="space-y-2">
               {result.builds.map((build, i) => {

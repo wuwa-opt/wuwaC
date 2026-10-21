@@ -19,18 +19,20 @@ import { runOptimization, type OptimizationHandle } from './worker.ts';
  *   equipped to them (exactly 5 and cost-legal), found by running the same
  *   search over a pool of just those Echoes. The search picks the main
  *   (slot-1) Echo, hence "best slot-1 order".
- * - One cost budget (12 or 10, default `ALLOCATION_COST_BUDGET`) for every
- *   step and for the baseline's legality; no Sonata lock, top 1. A member's
+ * - One cost budget (`ALLOCATION_COST_BUDGET`, 12) for every step and for
+ *   the baseline's legality; no Sonata lock, top 1. A member's
  *   minimum stats (the source build's `minStats`) apply to every step AND to
  *   its baseline, so both are scored under the same rules.
  * - Pure plumbing: all scoring comes from `search.ts`; `run` is injectable
  *   (defaults to `runOptimization`) so tests need no real Worker.
  */
 
-/** Default cost budget; a plan may pick 10 instead. */
+/**
+ * The cost budget every allocation step and baseline uses. 12 is a cap, not a
+ * layout: the search takes every layout up to it, so a lower cap never scores
+ * higher.
+ */
 export const ALLOCATION_COST_BUDGET = 12;
-
-export type AllocationCostBudget = OptimizeRequest['costBudget'];
 
 export interface AllocationMember {
   characterId: string;
@@ -48,8 +50,6 @@ export interface AllocationPlan {
   echoes: readonly OwnedEcho[];
   /** Drop Echoes below this level (0–25) from the allocation pools. */
   minLevel: number;
-  /** Cost budget for every step and the baseline; absent = `ALLOCATION_COST_BUDGET`. */
-  costBudget?: AllocationCostBudget;
   /**
    * Identity of the game data the members were resolved from (snapshot
    * version and fetch time). Only used by `planKey`: characters, weapons and
@@ -119,12 +119,11 @@ function canonical(value: unknown): string {
  * second main stat, substats, `equippedTo`) except `locked` and `origin`,
  * which never reach a search. Members count by character, objective,
  * context, weapon, enemy, Resonance Mode and minimum stats; the game data behind them by
- * `dataStamp`; plus the minimum level and the cost budget.
+ * `dataStamp`; plus the minimum level.
  */
 export function planKey(plan: AllocationPlan): string {
   return canonical({
     minLevel: plan.minLevel,
-    costBudget: budgetOf(plan),
     dataStamp: plan.dataStamp,
     echoes: plan.echoes.map((echo) => {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars -- deliberately left out of the key
@@ -177,14 +176,10 @@ function runStep(
   });
 }
 
-function budgetOf(plan: AllocationPlan): AllocationCostBudget {
-  return plan.costBudget ?? ALLOCATION_COST_BUDGET;
-}
-
-function requestFor(member: AllocationMember, costBudget: AllocationCostBudget, prune: boolean): OptimizeRequest {
+function requestFor(member: AllocationMember, prune: boolean): OptimizeRequest {
   const minStats = effectiveMinStats(member.minStats);
   return {
-    costBudget,
+    costBudget: ALLOCATION_COST_BUDGET,
     sonataLock: { mode: 'none' },
     objective: member.objective,
     ...(minStats === undefined ? {} : { minStats }),
@@ -203,7 +198,6 @@ export async function runAllocation(plan: AllocationPlan, options: AllocationOpt
   const run = options.run ?? runOptimization;
   const { signal } = options;
   const count = plan.members.length;
-  const costBudget = budgetOf(plan);
   const emit = (phase: AllocationProgress['phase'], index: number, characterId: string) =>
     (evaluated: number, total: number): void =>
       options.onProgress?.({ phase, index, count, characterId, evaluated, total });
@@ -227,13 +221,13 @@ export async function runAllocation(plan: AllocationPlan, options: AllocationOpt
       const result = await runStep(
         run,
         { ...member.context, echoes: equipped },
-        requestFor(member, costBudget, false),
+        requestFor(member, false),
         signal,
         emit('baseline', index, member.characterId),
       );
       baselines.push(
         result.builds[0] === undefined
-          ? { baseline: null, baselineNote: `the equipped Echoes are not a legal build (over the ${costBudget} cost budget${hasMinimums ? " or below the build's minimum stats" : ''})` }
+          ? { baseline: null, baselineNote: `the equipped Echoes are not a legal build (over the ${ALLOCATION_COST_BUDGET} cost budget${hasMinimums ? " or below the build's minimum stats" : ''})` }
           : { baseline: result.builds[0], baselineNote: null },
       );
     } catch (err) {
@@ -254,7 +248,7 @@ export async function runAllocation(plan: AllocationPlan, options: AllocationOpt
         const result = await runStep(
           run,
           { ...member.context, echoes: pool },
-          requestFor(member, costBudget, true),
+          requestFor(member, true),
           signal,
           emit('search', index, member.characterId),
         );

@@ -250,24 +250,16 @@ describe('TeamAllocation', () => {
     expect(screen.getByRole('button', { name: 'Save as 3 builds' })).toBeDisabled();
   });
 
-  it('runs every step under the chosen cost budget, says so, and goes stale when it changes', async () => {
+  it('offers no cost budget and runs every step under 12', async () => {
     const user = userEvent.setup();
     const { run, calls } = recordingRun();
     renderAllocation({ run });
-    const budget = screen.getByLabelText('Cost budget');
-    expect(budget).toHaveValue('12');
-
-    await user.selectOptions(budget, '10');
-    expect(screen.getByText(/cost budget of 10, the same budget your equipped Echoes are checked against/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Cost budget')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Allocate Echoes' }));
     await screen.findByRole('region', { name: 'Allocation preview' });
     // jiyan's baseline, then the three searches.
-    expect(calls.map((c) => c.costBudget)).toEqual([10, 10, 10, 10]);
+    expect(calls.map((c) => c.costBudget)).toEqual([12, 12, 12, 12]);
     expect(screen.getByRole('button', { name: 'Save as 3 builds' })).toBeEnabled();
-
-    await user.selectOptions(budget, '12');
-    expect(await screen.findByText(/your inputs changed since this preview/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save as 3 builds' })).toBeDisabled();
   });
 
   it('lets you reorder priorities with buttons', async () => {

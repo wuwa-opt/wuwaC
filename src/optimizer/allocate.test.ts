@@ -304,7 +304,7 @@ describe('runAllocation', () => {
       expect(bound).toMatchObject({ baseline: null, baselineNote: expect.stringContaining("below the build's minimum stats") });
       // With no minimum the note never mentions one.
       const tooCostly = (await runAllocation(
-        { ...plan(member('jiyan', 'atk')), costBudget: 10, echoes: strong.map((e) => ({ ...e, cost: 4 as const, equippedTo: 'jiyan' })) },
+        { ...plan(member('jiyan', 'atk')), echoes: strong.map((e) => ({ ...e, cost: 4 as const, equippedTo: 'jiyan' })) },
         { run: inlineRun },
       )).members[0];
       expect(tooCostly.baselineNote).not.toContain('minimum');
@@ -318,43 +318,38 @@ describe('runAllocation', () => {
   });
 
   describe('cost budget', () => {
-    // 4 + 3 + 3 + 1 + 1 = 12: legal under 12, over a budget of 10.
+    // 4 + 3 + 3 + 1 + 1 = 12: legal, and a layout a cap of 10 would reject.
     const costs: (1 | 3 | 4)[] = [4, 3, 3, 1, 1];
     const equipped = costs.map((cost, i) => mkEcho(`c${i}`, [['atk', 100]], { cost, equippedTo: 'jiyan' }));
-    const plan = (costBudget?: 10 | 12): AllocationPlan => ({
+    const plan: AllocationPlan = {
       members: [member('jiyan', 'atk'), member('verina', 'atk')],
       echoes: [...equipped, ...atkRanked],
       minLevel: 0,
       dataStamp: 'test',
-      ...(costBudget === undefined ? {} : { costBudget }),
-    });
+    };
 
-    it('defaults to 12 and sends the chosen budget to every step, baseline included', async () => {
+    it('always sends 12 to every step, baseline included', async () => {
       expect(ALLOCATION_COST_BUDGET).toBe(12);
-      for (const [budget, expected] of [[undefined, 12], [12, 12], [10, 10]] as const) {
-        const seen: number[] = [];
-        const run: RunFn = (data, req) => {
-          seen.push(req.costBudget);
-          return inlineRun(data, req);
-        };
-        await runAllocation(plan(budget), { run });
-        expect(seen).toEqual([expected, expected, expected]); // jiyan's baseline, then both searches
-      }
+      const seen: number[] = [];
+      const run: RunFn = (data, req) => {
+        seen.push(req.costBudget);
+        return inlineRun(data, req);
+      };
+      await runAllocation(plan, { run });
+      expect(seen).toEqual([12, 12, 12]); // jiyan's baseline, then both searches
     });
 
-    it('judges the baseline legal under 12 and over budget under 10', async () => {
-      const at12 = (await runAllocation(plan(12), { run: inlineRun })).members[0];
-      expect(at12.baseline?.echoIds).toEqual(['c0', 'c1', 'c2', 'c3', 'c4']);
-      const at10 = (await runAllocation(plan(10), { run: inlineRun })).members[0];
-      expect(at10).toMatchObject({ baseline: null, baselineNote: expect.stringContaining('over the 10 cost budget') });
+    it('judges a 12-cost loadout a legal baseline', async () => {
+      const { members } = await runAllocation(plan, { run: inlineRun });
+      expect(members[0].baseline?.echoIds).toEqual(['c0', 'c1', 'c2', 'c3', 'c4']);
     });
 
-    it('keeps every pick within the budget', async () => {
-      const { members } = await runAllocation(plan(10), { run: inlineRun });
+    it('keeps every pick within 12', async () => {
+      const { members } = await runAllocation(plan, { run: inlineRun });
       const byId = new Map([...equipped, ...atkRanked].map((e) => [e.id, e]));
       for (const m of members) {
         const total = m.best!.echoIds.reduce((sum, id) => sum + byId.get(id)!.cost, 0);
-        expect(total).toBeLessThanOrEqual(10);
+        expect(total).toBeLessThanOrEqual(12);
       }
     });
   });
@@ -453,11 +448,6 @@ describe('planKey', () => {
     expect(planKey(withMin({}))).toBe(key);
     expect(planKey(withMin({ energyRegen: 0 }))).toBe(key);
     expect(planKey(withMin(undefined))).toBe(key);
-  });
-
-  it('changes with the cost budget (absent means the default 12)', () => {
-    expect(planKey({ ...base, costBudget: 10 })).not.toBe(key);
-    expect(planKey({ ...base, costBudget: 12 })).toBe(key);
   });
 
   it("changes with a member's Resonance Mode", () => {

@@ -26,6 +26,7 @@ import { inventorySummary } from '../echoDisplay.ts';
 import { toDisplayValue } from '../format.ts';
 import { filterByUsage, type UsageFilter } from '../filter.ts';
 import { revokeObjectUrlLater } from '../download.ts';
+import { MAX_KAMERA_BYTES, readTextFile } from '../readFile.ts';
 
 function toFormValues(echo: OwnedEcho): EchoFormValues {
   return {
@@ -173,7 +174,7 @@ export function InventoryPage() {
   const handleFile = async (file: File | undefined): Promise<void> => {
     if (!file) return;
     try {
-      const text = await file.text();
+      const text = await readTextFile(file, MAX_KAMERA_BYTES, 'an Echo import');
       const rows = parseKameraEchoFile(text);
       setPreview({ fileName: file.name, ...mapKameraEchoes(rows, snapshot) });
       setTransferError(null);

@@ -266,7 +266,13 @@ interface Build {
 //   allocation saveBuilds). resonanceMode is a plain string that consumers
 //   check against characterResonanceModes(id); an unknown one counts as
 //   unset. Neither ever appears in share links.
-// All four fields are optional and unindexed: no Dexie version bump, and
+// Build.minStats: the sheet minimums the run used (OptimizeRequest.minStats,
+//   as sheet fractions: 0.7 = 70% Crit Rate). Energy Regen is the sheet's
+//   bonus, since no base is seeded. RotationOptimizer saveBuild writes it,
+//   allocation drafts copy it, and allocation and the unused-Echo finder
+//   read it, only via optimizer/minStats.ts (effectiveMinStats: positive
+//   finite entries, else absent). Never in share links.
+// All five fields are optional and unindexed: no Dexie version bump, and
 // backup format v1 is unchanged (new backups are a superset).
 
 interface Team {
@@ -402,8 +408,11 @@ interface Team {
     - `removeEcho` refuses it, `removeEchoes` skips it, and the UI disables
       Delete until it's unlocked.
     - Lock doesn't filter the optimizer and never appears in share links.
+  - Each build's saved `minStats` keys count as relevant stats in
+    `pruneInputs`, so an Echo a build needs to meet its minimum is never
+    fodder.
   - That covers the top-1 result at minimum level 0, for the saved
-    objectives only. A build that can't be checked against the current
+    objectives and minimums only. A build that can't be checked against the current
     snapshot blocks all fodder.
 - **Echo edits keep gear.** `EchoDraft.equippedTo` is optional. The Echo
   form never submits it, so `updateEcho` (a merge) keeps `equippedTo` and
@@ -441,6 +450,9 @@ interface Team {
     - A dual-mode character's mode is `Build.resonanceMode`, else a
       required per-member picker (`characterResonanceModes`). It is passed
       as `SearchData.resonanceMode`.
+  - **Minimum stats:** the source build's `minStats` go into every step's
+    request and the baseline's, into `planKey` and into the saved drafts.
+    A baseline that misses them gets no comparison.
   - **Baseline:** the same search over exactly the five `equippedTo`
     Echoes (best slot-1 order).
   - **Cancel:** `handle.cancel()` never settles its promise, so

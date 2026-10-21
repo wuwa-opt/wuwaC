@@ -1,4 +1,5 @@
 import type { ObjectiveSpec, OwnedEcho } from '../data/schema.ts';
+import { effectiveMinStats, type MinStats } from './minStats.ts';
 import { selectCandidates, type OptimizeRequest, type RankedBuild, type SearchData, type SearchResult } from './search.ts';
 import { runOptimization, type OptimizationHandle } from './worker.ts';
 
@@ -19,8 +20,9 @@ import { runOptimization, type OptimizationHandle } from './worker.ts';
  *   search over a pool of just those Echoes. The search picks the main
  *   (slot-1) Echo, hence "best slot-1 order".
  * - One cost budget (12 or 10, default `ALLOCATION_COST_BUDGET`) for every
- *   step and for the baseline's legality; no Sonata lock, no minimum stats,
- *   top 1.
+ *   step and for the baseline's legality; no Sonata lock, top 1. A member's
+ *   minimum stats (the source build's `minStats`) apply to every step AND to
+ *   its baseline, so both are scored under the same rules.
  * - Pure plumbing: all scoring comes from `search.ts`; `run` is injectable
  *   (defaults to `runOptimization`) so tests need no real Worker.
  */
@@ -35,6 +37,8 @@ export interface AllocationMember {
   /** Everything a run needs except the pool, which is filled per step. */
   context: Omit<SearchData, 'echoes'>;
   objective: ObjectiveSpec;
+  /** Sheet minimums from the source build; absent = none. Passed as `OptimizeRequest.minStats`. */
+  minStats?: MinStats;
 }
 
 export interface AllocationPlan {
@@ -114,7 +118,7 @@ function canonical(value: unknown): string {
  * Every Echo field counts (id, def, set, cost, level, rarity, main and
  * second main stat, substats, `equippedTo`) except `locked` and `origin`,
  * which never reach a search. Members count by character, objective,
- * context, weapon, enemy and Resonance Mode; the game data behind them by
+ * context, weapon, enemy, Resonance Mode and minimum stats; the game data behind them by
  * `dataStamp`; plus the minimum level and the cost budget.
  */
 export function planKey(plan: AllocationPlan): string {
@@ -135,6 +139,7 @@ export function planKey(plan: AllocationPlan): string {
       m.context.weapon.id,
       m.context.enemy,
       m.context.resonanceMode ?? null,
+      effectiveMinStats(m.minStats) ?? null,
     ]),
   });
 }
@@ -177,10 +182,12 @@ function budgetOf(plan: AllocationPlan): AllocationCostBudget {
 }
 
 function requestFor(member: AllocationMember, costBudget: AllocationCostBudget, prune: boolean): OptimizeRequest {
+  const minStats = effectiveMinStats(member.minStats);
   return {
     costBudget,
     sonataLock: { mode: 'none' },
     objective: member.objective,
+    ...(minStats === undefined ? {} : { minStats }),
     topN: 1,
     // The baseline pool is exactly the equipped Echoes: nothing to prune.
     ...(prune ? {} : { prune: false }),
@@ -215,6 +222,7 @@ export async function runAllocation(plan: AllocationPlan, options: AllocationOpt
       });
       continue;
     }
+    const hasMinimums = effectiveMinStats(member.minStats) !== undefined;
     try {
       const result = await runStep(
         run,
@@ -225,7 +233,7 @@ export async function runAllocation(plan: AllocationPlan, options: AllocationOpt
       );
       baselines.push(
         result.builds[0] === undefined
-          ? { baseline: null, baselineNote: `the equipped Echoes are not a legal build (over the ${costBudget} cost budget)` }
+          ? { baseline: null, baselineNote: `the equipped Echoes are not a legal build (over the ${costBudget} cost budget${hasMinimums ? " or below the build's minimum stats" : ''})` }
           : { baseline: result.builds[0], baselineNote: null },
       );
     } catch (err) {

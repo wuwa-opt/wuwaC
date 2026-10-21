@@ -8,7 +8,7 @@ import type { ResonanceMode } from '../../domain/characterMods.ts';
 import { standardMob } from '../../domain/damage.ts';
 import type { EnemySettings } from '../../optimizer/allocateMembers.ts';
 import { emptySheet } from '../../domain/stats.ts';
-import type { SearchData, SearchResult } from '../../optimizer/search.ts';
+import type { OptimizeRequest, SearchData, SearchResult } from '../../optimizer/search.ts';
 import { runOptimization, type OptimizationHandle } from '../../optimizer/worker.ts';
 import { db } from '../../state/db.ts';
 import { useLibraryStore } from '../../state/library.ts';
@@ -157,6 +157,112 @@ describe('RotationOptimizer progress', () => {
       await fake.handle.promise;
     });
     expect(screen.getByText(/Checked 5,000 combos \(120 scored in full\)/)).toBeInTheDocument();
+  });
+});
+
+describe('RotationOptimizer minimum stats', () => {
+  const resolved: SearchResult = {
+    builds: [{ echoIds: ['a', 'b', 'e', 'f', 'g'], score: 1000, sheet: emptySheet(), warnings: [], appliedAssumptions: [], mainEchoId: 'e' }],
+    evaluated: 1,
+    scored: 1,
+    total: 1,
+    prunedEchoes: [],
+  };
+  const requestOf = (): OptimizeRequest => run.mock.calls[0][1];
+
+  async function open(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    await user.click(screen.getByRole('button', { name: /minimum stats/i }));
+  }
+
+  it('is collapsed by default and sends no minimum when every box is empty', async () => {
+    const user = userEvent.setup();
+    run.mockReturnValue(fakeHandle().handle);
+    renderOptimizer();
+    expect(screen.getByRole('button', { name: /minimum stats/i })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByLabelText(/minimum energy regen/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    expect(requestOf()).not.toHaveProperty('minStats');
+  });
+
+  it('sends typed percentages as sheet fractions (20 -> 0.2) and skips empty or zero boxes', async () => {
+    const user = userEvent.setup();
+    run.mockReturnValue(fakeHandle().handle);
+    renderOptimizer();
+    await open(user);
+    await user.type(screen.getByLabelText(/minimum energy regen/i), '20');
+    await user.type(screen.getByLabelText(/minimum crit rate/i), '0');
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    expect(requestOf().minStats).toEqual({ energyRegen: 0.2 });
+  });
+
+  it('takes all three, including decimals', async () => {
+    const user = userEvent.setup();
+    run.mockReturnValue(fakeHandle().handle);
+    renderOptimizer();
+    await open(user);
+    await user.type(screen.getByLabelText(/minimum energy regen/i), '12.5');
+    await user.type(screen.getByLabelText(/minimum crit rate/i), '70');
+    await user.type(screen.getByLabelText(/minimum crit dmg/i), '200');
+    expect(screen.getByRole('button', { name: /minimum stats \(3 set\)/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    expect(requestOf().minStats).toEqual({ energyRegen: 0.125, critRate: 0.7, critDmg: 2 });
+  });
+
+  it('rejects a non-number or negative minimum without running', async () => {
+    const user = userEvent.setup();
+    renderOptimizer();
+    await open(user);
+    const er = screen.getByLabelText(/minimum energy regen/i);
+    await user.type(er, 'lots');
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/minimum energy regen must be a non-negative number/i);
+    await user.clear(er);
+    await user.type(er, '-5');
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/non-negative number/i);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("saves the run's minimums on the build, not later edits to the boxes", async () => {
+    await db.builds.clear();
+    useLibraryStore.setState({ builds: [], loaded: true });
+    const user = userEvent.setup();
+    const fake = fakeHandle();
+    run.mockReturnValue(fake.handle);
+    renderOptimizer();
+    await open(user);
+    await user.type(screen.getByLabelText(/minimum energy regen/i), '20');
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    await act(async () => {
+      fake.resolve(resolved);
+      await fake.handle.promise;
+    });
+    await user.clear(screen.getByLabelText(/minimum energy regen/i));
+    await user.type(screen.getByLabelText(/minimum energy regen/i), '99');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await user.type(screen.getByRole('textbox', { name: /build name/i }), 'ER run');
+    await user.click(screen.getByRole('button', { name: /confirm save/i }));
+    const [row] = await db.builds.toArray();
+    expect(row.minStats).toEqual({ energyRegen: 0.2 });
+  });
+
+  it('saves no minStats key for a run without minimums', async () => {
+    await db.builds.clear();
+    useLibraryStore.setState({ builds: [], loaded: true });
+    const user = userEvent.setup();
+    const fake = fakeHandle();
+    run.mockReturnValue(fake.handle);
+    renderOptimizer();
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    await act(async () => {
+      fake.resolve(resolved);
+      await fake.handle.promise;
+    });
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await user.type(screen.getByRole('textbox', { name: /build name/i }), 'Plain run');
+    await user.click(screen.getByRole('button', { name: /confirm save/i }));
+    const [row] = await db.builds.toArray();
+    expect(row).not.toHaveProperty('minStats');
   });
 });
 

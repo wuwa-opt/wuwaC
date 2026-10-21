@@ -143,6 +143,18 @@ describe('TeamAllocation', () => {
     expect(rows[1]).toHaveTextContent("Enemy: mob, Lv 90, 10% base RES (the Calculator's current settings; this build saved none).");
   });
 
+  it("says per member which minimum stats the build saved, and that they apply", () => {
+    useLibraryStore.setState({
+      builds: [{ ...build('jiyan'), minStats: { energyRegen: 0.2, critRate: 0.6 } }, build('verina'), build('yangyang')],
+      loaded: true,
+    });
+    renderAllocation();
+    const rows = within(screen.getByRole('list', { name: 'Priority order' })).getAllByRole('listitem');
+    expect(rows[0]).toHaveTextContent('Minimum stats: Energy Regen ≥ 20%, Crit Rate ≥ 60% (saved with the build).');
+    expect(rows[1]).not.toHaveTextContent('Minimum stats');
+    expect(screen.getByText(/Builds saved with minimum stats keep them/i)).toBeInTheDocument();
+  });
+
   it('previews each member in priority order with the honest baseline label', async () => {
     const user = userEvent.setup();
     renderAllocation();

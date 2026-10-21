@@ -2,6 +2,7 @@ import type { Build, CharacterData, RosterEntry, SonataSetData, WeaponData } fro
 import { characterResonanceModes, type ResonanceMode } from '../domain/characterMods.ts';
 import { buildEnemyProfile, type EnemyKind } from '../domain/enemy.ts';
 import type { AllocationMember, AllocationResult } from './allocate.ts';
+import { effectiveMinStats } from './minStats.ts';
 import { pruneInputs } from './prune.ts';
 
 /**
@@ -17,7 +18,9 @@ import { pruneInputs } from './prune.ts';
  * - the enemy is `build.enemy`, else the Calculator's current settings;
  * - a dual-mode character's Resonance Mode is `build.resonanceMode` when it
  *   is one of `characterResonanceModes(id)`, else the caller's picker
- *   choice. With neither, the member is blocked until the user picks one.
+ *   choice. With neither, the member is blocked until the user picks one;
+ * - minimum stats are `build.minStats` (the run's own), for the search and
+ *   the baseline alike.
  */
 
 export interface EnemySettings {
@@ -126,6 +129,7 @@ export function resolveMember(input: MemberInputs): ResolvedMember {
       modeSource = 'picker';
     }
   }
+  const minStats = effectiveMinStats(build.minStats);
   return {
     ok: true,
     characterId,
@@ -138,6 +142,7 @@ export function resolveMember(input: MemberInputs): ResolvedMember {
     member: {
       characterId,
       objective: build.objective,
+      ...(minStats === undefined ? {} : { minStats: { ...minStats } }),
       context: {
         character,
         weapon,
@@ -161,7 +166,7 @@ export type AllocationBuildDraft = Omit<Build, 'id' | 'updatedAt'>;
 
 /**
  * One draft per member that got a build, in priority order. Objective,
- * `objectiveId`, weapon, context, enemy and Resonance Mode are the ones the
+ * `objectiveId`, weapon, context, enemy, Resonance Mode and minimum stats are the ones the
  * run used, so the saved build re-runs and shares like any other.
  */
 export function allocationDrafts(input: {
@@ -190,6 +195,7 @@ export function allocationDrafts(input: {
       ...(resolved.member.context.resonanceMode === undefined
         ? {}
         : { resonanceMode: resolved.member.context.resonanceMode }),
+      ...(resolved.member.minStats === undefined ? {} : { minStats: { ...resolved.member.minStats } }),
     });
   });
   return drafts;

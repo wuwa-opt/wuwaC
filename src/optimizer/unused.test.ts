@@ -63,6 +63,44 @@ describe('findUnusedEchoes', () => {
   const pool = [strong1, strong2, weak, ...fillers(4)];
   const atkBuild = mkBuild('atk', ['strong1', ...fillerIds(4)], maxStat('atk'));
 
+  it('a high-Energy-Regen Echo is fodder without a minimum, and kept by a build that needs the regen', () => {
+    // Same pool as above, but `weak` also carries Energy Regen the strong ones lack.
+    const regen = mkEcho('regen', 4, { atk: 10, energyRegen: 0.2 });
+    const echoes = [strong1, strong2, regen, ...fillers(4)];
+    const members = ['strong1', ...fillerIds(4)];
+    const free = findUnusedEchoes({ echoes, builds: [mkBuild('atk', members, maxStat('atk'))], characters });
+    expect(statusOf(free).regen).toBe('fodder');
+
+    const bound = findUnusedEchoes({
+      echoes,
+      builds: [mkBuild('atk', members, maxStat('atk'), { minStats: { energyRegen: 0.2 } })],
+      characters,
+    });
+    expect(bound.get('regen')).toMatchObject({ status: 'unused', reason: 'kept', keptBy: 'atk' });
+    // Energy Regen is now relevant, but nothing else changes for the Echoes that carry none.
+    expect(statusOf(bound).strong2).toBe('unused');
+  });
+
+  it('only the build that has the minimum keeps the Echo; another build without it would drop it', () => {
+    const regen = mkEcho('regen', 4, { atk: 10, energyRegen: 0.2 });
+    const echoes = [strong1, strong2, regen, ...fillers(4)];
+    const members = ['strong1', ...fillerIds(4)];
+    const plain = mkBuild('plain', members, maxStat('atk'));
+    const needsRegen = mkBuild('needs', members, maxStat('atk'), { minStats: { energyRegen: 0.2 } });
+    expect(statusOf(findUnusedEchoes({ echoes, builds: [plain], characters })).regen).toBe('fodder');
+    expect(findUnusedEchoes({ echoes, builds: [plain, needsRegen], characters }).get('regen')).toMatchObject({ reason: 'kept', keptBy: 'needs' });
+  });
+
+  it('a zero or empty saved minimum changes nothing', () => {
+    const regen = mkEcho('regen', 4, { atk: 10, energyRegen: 0.2 });
+    const echoes = [strong1, strong2, regen, ...fillers(4)];
+    const members = ['strong1', ...fillerIds(4)];
+    for (const minStats of [{}, { energyRegen: 0 }]) {
+      const verdicts = findUnusedEchoes({ echoes, builds: [mkBuild('atk', members, maxStat('atk'), { minStats })], characters });
+      expect(statusOf(verdicts).regen).toBe('fodder');
+    }
+  });
+
   it('marks build members and equipped Echoes in-use, dominated unused Echoes fodder', () => {
     const equippedWeak = mkEcho('equippedWeak', 4, { atk: 5 }, { equippedTo: 'jiyan' });
     const verdicts = findUnusedEchoes({ echoes: [...pool, equippedWeak], builds: [atkBuild], characters });

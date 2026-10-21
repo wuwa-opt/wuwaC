@@ -16,11 +16,13 @@ export function EchoStatus({
   snapshot,
   onEdit,
   onDelete,
+  onToggleLock,
 }: {
   echo: OwnedEcho | null;
   snapshot: Snapshot;
   onEdit: (echo: OwnedEcho) => void;
   onDelete: (id: string) => void;
+  onToggleLock: (echo: OwnedEcho) => void;
 }) {
   if (echo === null) {
     return (
@@ -109,10 +111,30 @@ export function EchoStatus({
         <button type="button" onClick={() => onEdit(echo)} className={`${btnCyan} min-h-11`}>
           Edit
         </button>
-        <button type="button" onClick={() => onDelete(echo.id)} className={`${btnDangerGhost} min-h-11`}>
+        <button
+          type="button"
+          onClick={() => onToggleLock(echo)}
+          aria-pressed={echo.locked === true}
+          title={echo.locked ? 'Unlock so this Echo can be deleted again' : 'Protect this Echo from deletion and safe-fodder cleanup'}
+          className={`${btnCyan} min-h-11`}
+        >
+          {echo.locked ? 'Unlock' : 'Lock'}
+        </button>
+        <button
+          type="button"
+          onClick={() => onDelete(echo.id)}
+          disabled={echo.locked === true}
+          aria-describedby={echo.locked ? 'echo-locked-note' : undefined}
+          className={`${btnDangerGhost} min-h-11`}
+        >
           Delete
         </button>
       </div>
+      {echo.locked && (
+        <p id="echo-locked-note" className="mt-2 text-xs text-fog">
+          Locked — unlock this Echo to delete it. Locking does not change what the optimizer searches.
+        </p>
+      )}
       </div>
     </Window>
   );

@@ -272,3 +272,70 @@ describe('inventory store: batch delete and restore', () => {
     expect(useInventoryStore.getState().generation).toBe(before + 1);
   });
 });
+
+describe('inventory store: locks', () => {
+  const seed = async (n: number) => {
+    const rows = [];
+    for (let i = 0; i < n; i += 1) rows.push(await useInventoryStore.getState().addEcho({ ...draft, label: `L${i}` }));
+    return rows;
+  };
+
+  it('setLocked locks and unlocks, persisting `locked: true` or no key at all', async () => {
+    const [a, b] = await seed(2);
+    const locked = await useInventoryStore.getState().setLocked([a.id], true);
+    expect(locked).toEqual([{ ...a, locked: true }]);
+    expect(await db.ownedEchoes.get(a.id)).toEqual({ ...a, locked: true });
+    expect(useInventoryStore.getState().echoes.find((e) => e.id === a.id)?.locked).toBe(true);
+    expect(useInventoryStore.getState().echoes.find((e) => e.id === b.id)).toEqual(b);
+
+    await useInventoryStore.getState().setLocked([a.id], false);
+    expect(await db.ownedEchoes.get(a.id)).toEqual(a);
+    expect(await db.ownedEchoes.get(a.id)).not.toHaveProperty('locked');
+  });
+
+  it('setLocked ignores unknown ids and rows already in that state', async () => {
+    const [a] = await seed(1);
+    expect(await useInventoryStore.getState().setLocked(['nope'], true)).toEqual([]);
+    expect(await useInventoryStore.getState().setLocked([a.id], false)).toEqual([]);
+    await useInventoryStore.getState().setLocked([a.id], true);
+    expect(await useInventoryStore.getState().setLocked([a.id], true)).toEqual([]);
+  });
+
+  it('a failing setLocked transaction rolls back and leaves state untouched', async () => {
+    const rows = await seed(3);
+    const original = db.ownedEchoes.bulkPut.bind(db.ownedEchoes);
+    vi.spyOn(db.ownedEchoes, 'bulkPut').mockImplementation((async (items: unknown[]) => {
+      await original([items[0]] as never);
+      throw new Error('disk full');
+    }) as never);
+    await expect(useInventoryStore.getState().setLocked(rows.map((r) => r.id), true)).rejects.toThrow('disk full');
+    expect((await db.ownedEchoes.toArray()).some((e) => e.locked)).toBe(false);
+    expect(useInventoryStore.getState().echoes).toEqual(rows);
+  });
+
+  it('removeEcho throws on a locked Echo and deletes it once unlocked', async () => {
+    const [a] = await seed(1);
+    await useInventoryStore.getState().setLocked([a.id], true);
+    await expect(useInventoryStore.getState().removeEcho(a.id)).rejects.toThrow(/locked/);
+    expect(await db.ownedEchoes.count()).toBe(1);
+    await useInventoryStore.getState().setLocked([a.id], false);
+    await expect(useInventoryStore.getState().removeEcho(a.id)).resolves.toEqual(a);
+  });
+
+  it('removeEchoes skips locked Echoes and returns only what it deleted', async () => {
+    const [a, b, c] = await seed(3);
+    await useInventoryStore.getState().setLocked([b.id], true);
+    const removed = await useInventoryStore.getState().removeEchoes([a.id, b.id, c.id]);
+    expect(removed).toEqual([a, c]);
+    expect((await db.ownedEchoes.toArray()).map((e) => e.id)).toEqual([b.id]);
+    expect(useInventoryStore.getState().echoes.map((e) => e.id)).toEqual([b.id]);
+  });
+
+  it('updateEcho keeps the lock', async () => {
+    const [a] = await seed(1);
+    await useInventoryStore.getState().setLocked([a.id], true);
+    const updated = await useInventoryStore.getState().updateEcho(a.id, { level: 20 });
+    expect(updated.locked).toBe(true);
+    expect((await db.ownedEchoes.get(a.id))?.locked).toBe(true);
+  });
+});

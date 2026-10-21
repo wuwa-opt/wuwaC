@@ -89,6 +89,7 @@ export function InventoryPage() {
   const updateEcho = useInventoryStore((s) => s.updateEcho);
   const removeEcho = useInventoryStore((s) => s.removeEcho);
   const removeEchoes = useInventoryStore((s) => s.removeEchoes);
+  const setLocked = useInventoryStore((s) => s.setLocked);
   const restoreEchoes = useInventoryStore((s) => s.restoreEchoes);
   const generation = useInventoryStore((s) => s.generation);
   const importEchoes = useInventoryStore((s) => s.importEchoes);
@@ -252,6 +253,7 @@ export function InventoryPage() {
       .catch((err: unknown) => setTransferError(err instanceof Error ? err.message : 'Delete failed.'));
   };
 
+  const lockedCount = echoes.filter((e) => e.locked === true).length;
   const flagged = echoes.filter((e) => echoDefIssues(e, snapshot.echoDefs).length > 0);
   const activeUsageFilter: UsageFilter = usage === null ? 'all' : usageFilter;
   const filtering = sonataFilter !== '' || costFilter !== null || activeUsageFilter !== 'all';
@@ -558,6 +560,12 @@ export function InventoryPage() {
             <p className="border-b-2 border-dashed border-line px-3 py-2 text-xs text-fog">
               <span className="font-bold text-ink">{`${usageCounts.unused} unused`}</span>
               {' — not equipped and in no saved build. '}
+              {lockedCount > 0 && (
+                <>
+                  <span className="font-bold text-ink">{`${lockedCount} locked`}</span>
+                  {' — never fodder, can\'t be deleted until unlocked. '}
+                </>
+              )}
               <span className="font-bold text-accent-text">{`${usageCounts.fodder} safe fodder`}</span>
               {usageCounts.noObjective
                 ? ' — needs a saved build with an objective to check against; save one from the optimizer.'
@@ -642,6 +650,11 @@ export function InventoryPage() {
           echo={selected}
           snapshot={snapshot}
           onEdit={setEditing}
+          onToggleLock={(echo) => {
+            setLocked([echo.id], echo.locked !== true)
+              .then(() => pushToast(echo.locked ? 'Echo unlocked.' : 'Echo locked.'))
+              .catch((err: unknown) => setTransferError(err instanceof Error ? err.message : 'Could not change the lock.'));
+          }}
           onDelete={(id) => {
             removeEcho(id)
               .then((row) => {

@@ -90,6 +90,27 @@ describe('InventoryPage', () => {
     expect(await db.ownedEchoes.count()).toBe(0);
   });
 
+  it('locks an echo: Delete is disabled until unlocked, and the lock persists', async () => {
+    const user = userEvent.setup();
+    render(<InventoryPage />);
+    await addEchoViaUi(user, 'Page Echo');
+    const status = await selectEcho(user, 'Page Echo');
+
+    await user.click(within(status).getByRole('button', { name: 'Lock' }));
+
+    expect(await within(status).findByRole('button', { name: 'Unlock' })).toHaveAttribute('aria-pressed', 'true');
+    const del = within(status).getByRole('button', { name: /delete/i });
+    expect(del).toBeDisabled();
+    expect(del).toHaveAccessibleDescription(/unlock this echo to delete it/i);
+    expect(within(screen.getByRole('table')).getByText('Locked')).toBeInTheDocument();
+    expect((await db.ownedEchoes.toArray())[0].locked).toBe(true);
+
+    await user.click(within(status).getByRole('button', { name: 'Unlock' }));
+    await waitFor(() => expect(within(status).getByRole('button', { name: /delete/i })).toBeEnabled());
+    expect((await db.ownedEchoes.toArray())[0]).not.toHaveProperty('locked');
+    expect(within(screen.getByRole('table')).queryByText('Locked')).not.toBeInTheDocument();
+  });
+
   it('offers Undo after a delete and puts the same row back', async () => {
     const user = userEvent.setup();
     render(<InventoryPage />);
@@ -553,6 +574,36 @@ describe('InventoryPage', () => {
         // Same rows, same ids: the finder tags them fodder again.
         expect(await screen.findByRole('button', { name: 'Delete 2 safe-fodder Echoes' })).toBeInTheDocument();
         expect(screen.getByText('2 safe fodder')).toBeInTheDocument();
+      });
+
+      it('excludes locked Echoes from the count and the delete', async () => {
+        await db.ownedEchoes.update('spare2', { locked: true });
+        const user = userEvent.setup();
+        render(<InventoryPage />);
+        await screen.findByText('Spare');
+        expect(await screen.findByText('1 safe fodder')).toBeInTheDocument();
+        expect(screen.getByText('1 locked')).toBeInTheDocument();
+        await user.selectOptions(screen.getByLabelText(/usage/i), 'fodder');
+        expect(screen.queryByText('Spare 2')).not.toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: 'Delete 1 safe-fodder Echo' }));
+        await user.click(screen.getByRole('button', { name: 'Delete 1 Echo' }));
+
+        await waitFor(() => expect(screen.queryByText('Spare')).not.toBeInTheDocument());
+        expect((await db.ownedEchoes.toArray()).map((e) => e.id)).toContain('spare2');
+        expect(await db.ownedEchoes.count()).toBe(7);
+      });
+
+      it('aborts if a confirmed Echo gets locked before the click', async () => {
+        const user = userEvent.setup();
+        await openFodderFilter(user);
+        await user.click(screen.getByRole('button', { name: 'Delete 2 safe-fodder Echoes' }));
+        await useInventoryStore.getState().setLocked(['spare2'], true);
+
+        await user.click(screen.getByRole('button', { name: 'Delete 2 Echoes' }));
+
+        expect(await screen.findByText(/safe-fodder list changed/i)).toBeInTheDocument();
+        expect(await db.ownedEchoes.count()).toBe(8);
       });
 
       it('Cancel deletes nothing', async () => {

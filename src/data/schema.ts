@@ -407,6 +407,12 @@ export const ownedEchoSchema = z
       .max(5),
     equippedTo: z.string().min(1).nullable().default(null),
     origin: z.string().min(1),
+    /**
+     * Protection, like the in-game lock: a locked Echo is never safe fodder and
+     * can't be deleted until unlocked. It does not filter the optimizer. Absent
+     * = unlocked (never stored as `false`). Unindexed: no Dexie version bump.
+     */
+    locked: z.literal(true).optional(),
   })
   .refine((e) => new Set(e.substats.map((s) => s.stat)).size === e.substats.length, {
     message: 'duplicate substats on one Echo',

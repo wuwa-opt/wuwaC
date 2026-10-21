@@ -151,6 +151,9 @@
   --color-icon-disk-2: #a9b2e6;
   --color-icon-disk-3: #e6f2ff;
   --color-icon-disk-4: #ffffff;
+  --color-icon-lock-2: #f6c98a;
+  --color-icon-lock-3: #e9a15b;
+  --color-icon-lock-4: #ffe58a;
 }
 
 /* Dark theme: same tokens, re-grounded. Wins over the layered @theme

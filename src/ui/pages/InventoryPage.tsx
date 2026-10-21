@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   exportKameraEchoes,
   KAMERA_ORIGIN,
@@ -7,7 +7,9 @@ import {
   type KameraImportResult,
 } from '../../data/kamera.ts';
 import type { OwnedEcho } from '../../data/schema.ts';
+import { findUnusedEchoes } from '../../optimizer/unused.ts';
 import { echoDefIssues, useInventoryStore } from '../../state/inventory.ts';
+import { useLibraryStore } from '../../state/library.ts';
 import { seedInventory } from '../../state/seed.ts';
 import { useSnapshotStore } from '../../state/snapshotStore.ts';
 import { EchoForm, type EchoFormValues } from '../components/EchoForm.tsx';
@@ -22,6 +24,7 @@ import { usePrefersReducedMotion, useTypewriter } from '../motion.ts';
 import { Alert, CostPips, EmptyState, PageHeader, Window } from '../components/ui.tsx';
 import { inventorySummary } from '../echoDisplay.ts';
 import { toDisplayValue } from '../format.ts';
+import { filterByUsage, type UsageFilter } from '../filter.ts';
 import { revokeObjectUrlLater } from '../download.ts';
 
 function toFormValues(echo: OwnedEcho): EchoFormValues {
@@ -86,6 +89,7 @@ export function InventoryPage() {
   const [editing, setEditing] = useState<OwnedEcho | null>(null);
   const [sonataFilter, setSonataFilter] = useState('');
   const [costFilter, setCostFilter] = useState<1 | 3 | 4 | null>(null);
+  const [usageFilter, setUsageFilter] = useState<UsageFilter>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [seedSonata, setSeedSonata] = useState('');
   const [preview, setPreview] = useState<(KameraImportResult & { fileName: string }) | null>(null);
@@ -97,6 +101,9 @@ export function InventoryPage() {
 
   const snapshot = useSnapshotStore((s) => s.snapshot);
   const ensureSnapshotLoaded = useSnapshotStore((s) => s.ensureLoaded);
+  const builds = useLibraryStore((s) => s.builds);
+  const buildsLoaded = useLibraryStore((s) => s.loaded);
+  const loadBuilds = useLibraryStore((s) => s.load);
 
   useEffect(() => {
     if (!loaded) void load();
@@ -104,6 +111,39 @@ export function InventoryPage() {
   useEffect(() => {
     void ensureSnapshotLoaded();
   }, [ensureSnapshotLoaded]);
+  useEffect(() => {
+    if (!buildsLoaded) void loadBuilds();
+  }, [buildsLoaded, loadBuilds]);
+
+  // Derived, never stored. Until the library loads every unequipped Echo would read as unused.
+  const usage = useMemo(
+    () => (buildsLoaded ? findUnusedEchoes({ echoes, builds, characters: snapshot.characters }) : null),
+    [buildsLoaded, echoes, builds, snapshot.characters],
+  );
+  const usageCounts = useMemo(() => {
+    let unused = 0;
+    let fodder = 0;
+    let checked = 0;
+    let noObjective = false;
+    let unchecked = false;
+    for (const verdict of usage?.values() ?? []) {
+      if (verdict.status !== 'in-use') unused += 1;
+      if (verdict.status === 'fodder') fodder += 1;
+      checked = Math.max(checked, verdict.buildsChecked);
+      if (verdict.reason === 'no-objective-builds') noObjective = true;
+      if (verdict.reason === 'unchecked-build') unchecked = true;
+    }
+    return { unused, fodder, checked, noObjective, unchecked };
+  }, [usage]);
+  const usageTags = useMemo(() => {
+    const tags = new Map<string, 'unused' | 'fodder'>();
+    for (const [id, verdict] of usage ?? []) {
+      // Fodder is always tagged; plain "unused" only while the usage filter is on.
+      if (verdict.status === 'fodder') tags.set(id, 'fodder');
+      else if (verdict.status === 'unused' && usageFilter !== 'all') tags.set(id, 'unused');
+    }
+    return tags;
+  }, [usage, usageFilter]);
 
   const defName = (echoDefId: string): string =>
     snapshot.echoDefs.find((d) => d.id === echoDefId)?.name ?? echoDefId;
@@ -139,9 +179,14 @@ export function InventoryPage() {
     }
   };
   const flagged = echoes.filter((e) => echoDefIssues(e, snapshot.echoDefs).length > 0);
-  const filtering = sonataFilter !== '' || costFilter !== null;
-  const visible = echoes.filter(
-    (e) => (sonataFilter === '' || e.sonataId === sonataFilter) && (costFilter === null || e.cost === costFilter),
+  const activeUsageFilter: UsageFilter = usage === null ? 'all' : usageFilter;
+  const filtering = sonataFilter !== '' || costFilter !== null || activeUsageFilter !== 'all';
+  const visible = filterByUsage(
+    echoes.filter(
+      (e) => (sonataFilter === '' || e.sonataId === sonataFilter) && (costFilter === null || e.cost === costFilter),
+    ),
+    usage ?? new Map(),
+    activeUsageFilter,
   );
   const selected = visible.find((e) => e.id === selectedId) ?? null;
   const countByCost = new Map<number, number>();
@@ -397,7 +442,21 @@ export function InventoryPage() {
           bodyClassName=""
           actions={
             loaded && echoes.length > 0 ? (
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <label htmlFor="inventory-usage-filter" className="text-sm font-bold whitespace-nowrap">
+                  Usage
+                </label>
+                <select
+                  id="inventory-usage-filter"
+                  value={activeUsageFilter}
+                  disabled={usage === null}
+                  onChange={(e) => setUsageFilter(e.target.value as UsageFilter)}
+                  className={`${inputClass} w-auto text-ink`}
+                >
+                  <option value="all">All echoes</option>
+                  <option value="unused">{`Unused (${usageCounts.unused})`}</option>
+                  <option value="fodder">{`Safe fodder (${usageCounts.fodder})`}</option>
+                </select>
                 <label htmlFor="inventory-sonata-filter" className="text-sm font-bold whitespace-nowrap">
                   Sonata set
                 </label>
@@ -418,6 +477,18 @@ export function InventoryPage() {
             ) : undefined
           }
         >
+          {loaded && echoes.length > 0 && usage !== null && (
+            <p className="border-b-2 border-dashed border-line px-3 py-2 text-xs text-fog">
+              <span className="font-bold text-ink">{`${usageCounts.unused} unused`}</span>
+              {' — not equipped and in no saved build. '}
+              <span className="font-bold text-accent-text">{`${usageCounts.fodder} safe fodder`}</span>
+              {usageCounts.noObjective
+                ? ' — needs a saved build with an objective to check against; save one from the optimizer.'
+                : usageCounts.unchecked
+                  ? ' — a saved build no longer matches current game data, so nothing is marked fodder.'
+                  : ` — for every saved build with an objective (${usageCounts.checked}), the optimizer finds an equally good best result without them, even with Echoes equipped elsewhere excluded. Top result at minimum level 0 only; other objectives may still want them.`}
+            </p>
+          )}
           {!loaded ? (
             <div className="p-4">
               <Skeleton lines={4} />
@@ -429,7 +500,9 @@ export function InventoryPage() {
           ) : visible.length === 0 ? (
             <div className="p-4">
               <EmptyState>
-                {sonataFilter !== ''
+                {activeUsageFilter !== 'all'
+                  ? 'No echoes match this usage filter — pick All echoes to see the full inventory.'
+                  : sonataFilter !== ''
                   ? 'No echoes with this Sonata set — pick All sets to see the full inventory.'
                   : 'No echoes at this cost — tap the cost tile again to clear it.'}
               </EmptyState>
@@ -438,6 +511,7 @@ export function InventoryPage() {
             <EchoTable
               echoes={visible}
               snapshot={snapshot}
+              usageTags={usageTags}
               selectedId={selected?.id ?? null}
               onSelect={(id) => {
                 setSelectedId(id);

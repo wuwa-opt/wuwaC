@@ -2,14 +2,17 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { OwnedEcho } from '../../data/schema.ts';
+import type { Build, OwnedEcho } from '../../data/schema.ts';
 import { db } from '../../state/db.ts';
 import { useInventoryStore } from '../../state/inventory.ts';
+import { useLibraryStore } from '../../state/library.ts';
 import { InventoryPage } from './InventoryPage.tsx';
 
 beforeEach(async () => {
   await db.ownedEchoes.clear();
+  await db.builds.clear();
   useInventoryStore.setState({ echoes: [], loaded: false });
+  useLibraryStore.setState({ builds: [], loaded: false });
 });
 
 async function addEchoViaUi(user: ReturnType<typeof userEvent.setup>, nickname?: string): Promise<void> {
@@ -391,6 +394,88 @@ describe('InventoryPage', () => {
       await db.ownedEchoes.add(base);
       render(<InventoryPage />);
       expect(await screen.findByText(/You're holding 1 echo across 1 Sonata set/)).toBeInTheDocument();
+    });
+  });
+
+  describe('unused-Echo finder', () => {
+    const one: OwnedEcho = {
+      id: 's1',
+      label: 'Strong 1',
+      echoDefId: 'hooscamp',
+      sonataId: 'sierra-gale',
+      cost: 1,
+      level: 25,
+      rarity: 5,
+      mainStat: { stat: 'atkPct', value: 0.3 },
+      substats: [],
+      equippedTo: null,
+      origin: 'manual',
+    };
+    // Five same-def 1-costs fill the build; a 1-cost at budget 12 needs 5 dominators (k = 5).
+    const strong = [0.3, 0.29, 0.28, 0.27, 0.26].map((value, i) => ({
+      ...one,
+      id: `s${i + 1}`,
+      label: `Strong ${i + 1}`,
+      mainStat: { stat: 'atkPct' as const, value },
+    }));
+    const spare: OwnedEcho = { ...one, id: 'spare', label: 'Spare', mainStat: { stat: 'atkPct', value: 0.1 } };
+    // The only 4-cost: nothing dominates it, so it is unused but not fodder.
+    const big: OwnedEcho = {
+      ...one,
+      id: 'big',
+      label: 'Big',
+      echoDefId: 'tempest-mephis',
+      sonataId: 'void-thunder',
+      cost: 4,
+    };
+    const build: Build = {
+      id: 'build-1',
+      name: 'ATK% test',
+      characterId: 'jiyan',
+      weaponId: 'verdant-summit',
+      echoIds: ['s1', 's2', 's3', 's4', 's5'],
+      objectiveId: 'max-stat',
+      objective: { kind: 'max-stat', stat: 'atkPct' },
+      updatedAt: '2026-10-21T00:00:00.000Z',
+    };
+
+    it('counts, tags and filters unused Echoes and safe fodder', async () => {
+      await db.ownedEchoes.bulkAdd([...strong, spare, big]);
+      await db.builds.add(build);
+      const user = userEvent.setup();
+      render(<InventoryPage />);
+      await screen.findByText('Spare');
+
+      expect(await screen.findByText('2 unused')).toBeInTheDocument();
+      expect(screen.getByText('1 safe fodder')).toBeInTheDocument();
+      expect(screen.getByText(/not equipped and in no saved build/)).toBeInTheDocument();
+      expect(screen.getByText(/for every saved build with an objective \(1\)/)).toBeInTheDocument();
+      // Fodder is always tagged; plain unused only while filtering.
+      const spareRow = screen.getByText('Spare').closest('tr')!;
+      expect(within(spareRow).getByText('fodder')).toHaveClass('px-tag');
+      expect(within(screen.getByText('Big').closest('tr')!).queryByText('unused')).not.toBeInTheDocument();
+
+      await user.selectOptions(screen.getByLabelText(/usage/i), 'fodder');
+      expect(screen.getByText('Spare')).toBeInTheDocument();
+      expect(screen.queryByText('Big')).not.toBeInTheDocument();
+      expect(screen.queryByText('Strong 1')).not.toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /echo inventory/i })).toHaveTextContent('(1/7)');
+
+      await user.selectOptions(screen.getByLabelText(/usage/i), 'unused');
+      expect(screen.getByText('Spare')).toBeInTheDocument();
+      expect(within(screen.getByText('Big').closest('tr')!).getByText('unused')).toBeInTheDocument();
+      expect(screen.queryByText('Strong 5')).not.toBeInTheDocument();
+
+      await user.selectOptions(screen.getByLabelText(/usage/i), 'all');
+      expect(screen.getByText('Strong 5')).toBeInTheDocument();
+    });
+
+    it('explains that safe fodder needs a saved build with an objective', async () => {
+      await db.ownedEchoes.bulkAdd([spare, big]);
+      render(<InventoryPage />);
+      expect(await screen.findByText('2 unused')).toBeInTheDocument();
+      expect(screen.getByText('0 safe fodder')).toBeInTheDocument();
+      expect(screen.getByText(/needs a saved build with an objective/)).toBeInTheDocument();
     });
   });
 });

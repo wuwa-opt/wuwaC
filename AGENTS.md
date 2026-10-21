@@ -187,6 +187,9 @@ UI (React components)
       need same-def dominators.
     - `prune.soundness.test.ts` (a seeded pruned-vs-unpruned property test)
       is the regression gate.
+    - Relevant stats and main-slot carriers come only from `pruneInputs`
+      (`optimizer/prune.ts`), shared by `prepare()` and the unused-Echo
+      finder. Never re-derive them elsewhere.
 
     One dominator is unsound: several same-cost Echoes share a combo, and
     duplicate defs don't add Sonata pieces.
@@ -361,6 +364,18 @@ interface Team {
   scan-fixtures/ocr js4pass`.
 - Roll quality (Echo substat tiers, 10-block roll value) is the pure module
   `src/domain/rollValue.ts` over `SUB_STAT_TIERS`; UI only renders it.
+- Unused-Echo finder: the pure optimizer module `src/optimizer/unused.ts`
+  (`findUnusedEchoes`), memoised by the Inventory page and filtered with
+  `filterByUsage` (`src/ui/filter.ts`). It is derived, never stored, and
+  shows information only (no bulk delete; the app has no undo).
+  - **Unused**: `equippedTo === null` and in no saved non-reference build.
+  - **Safe fodder**: unused, at least one saved build has an `objective`,
+    and `pruneDominated` drops it for every such build (`topN: 1`,
+    `costBudget: 12`) in both the whole inventory and the
+    equipped-elsewhere-excluded pool (`selectCandidates`).
+  - That covers the top-1 result at minimum level 0, for the saved
+    objectives only. A build that can't be checked against the current
+    snapshot blocks all fodder.
 - UI dynamics: live-feedback primitives in `src/ui/components/feedback.tsx` +
   `src/ui/toasts.ts`, motion hooks in `src/ui/motion.ts` (`useAnimatedNumber`,
   `useReveal` for scroll-in Windows, `useTypewriter` for the mascot bubble), command palette in

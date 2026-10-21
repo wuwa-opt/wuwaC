@@ -1,5 +1,7 @@
-import type { Attribute, OwnedEcho, SkillKind, StatKey } from '../data/schema.ts';
+import type { Attribute, CharacterData, CharacterSkill, OwnedEcho, SkillKind, StatKey } from '../data/schema.ts';
 import type { ObjectiveSpec } from '../domain/objectives.ts';
+import { resolveObjectiveSkill } from '../domain/objectives.ts';
+import { hasMainEchoBonus } from '../domain/stats.ts';
 
 /**
  * Optimizer layer: dominance pruning (reference doc §7, step 2).
@@ -92,6 +94,49 @@ export function relevantStatsForObjective(
   keys.add('specialBase');
   keys.add('specialBonus');
   return [...keys];
+}
+
+/** What one objective needs from the character to prune (see `pruneInputs`). */
+export interface PruneInputs {
+  /** The resolved skill of an `expected-damage` objective; undefined for other kinds. */
+  skill: CharacterSkill | undefined;
+  relevantStats: StatKey[];
+  /** Whether an echo definition carries a main-slot bonus for this character. */
+  isMainCarrier: (echoDefId: string) => boolean;
+}
+
+/**
+ * The one derivation of pruning inputs for (character, objective), shared
+ * by the search (`prepare`) and the unused-Echo finder so they can never
+ * disagree. Pruning follows the motion's own bonus bucket (DamageList.Type)
+ * and scaling, not the parent skill's — with a skill-level fallback for
+ * legacy specs whose motion no longer resolves. `minStatKeys` are always
+ * relevant. Throws (via `resolveObjectiveSkill`) on an unknown skill id.
+ */
+export function pruneInputs(
+  character: CharacterData,
+  objective: ObjectiveSpec,
+  minStatKeys: readonly StatKey[] = [],
+): PruneInputs {
+  const skill =
+    objective.kind === 'expected-damage' ? resolveObjectiveSkill(character.skills, objective) : undefined;
+  let motion: CharacterSkill['motionValues'][number] | undefined;
+  if (objective.kind === 'expected-damage' && skill !== undefined) {
+    const wantedMotion = objective.motionName;
+    motion = skill.motionValues.find((m) => m.name === wantedMotion);
+  }
+  const relevantStats = relevantStatsForObjective(
+    objective,
+    character.attribute,
+    motion?.dmgType ?? skill?.kind ?? 'basic',
+    [...minStatKeys],
+    motion?.scaling ?? skill?.scaling ?? 'ATK',
+  );
+  return {
+    skill,
+    relevantStats,
+    isMainCarrier: (echoDefId) => hasMainEchoBonus(character.id, echoDefId),
+  };
 }
 
 export interface PruneResult {

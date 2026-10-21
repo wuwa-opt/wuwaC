@@ -263,6 +263,60 @@ describe('runAllocation', () => {
     });
   });
 
+  describe('minimum stats (the source build\'s)', () => {
+    // Five strong ATK Echoes with no Energy Regen; five weak ones that carry it.
+    const strong = Array.from({ length: 5 }, (_, i) => mkEcho(`s${i}`, [['atk', 100]]));
+    const regen = Array.from({ length: 5 }, (_, i) => mkEcho(`r${i}`, [['atk', 10], ['energyRegen', 0.05]]));
+    const withMin = (): AllocationMember => ({ ...member('jiyan', 'atk'), minStats: { energyRegen: 0.2 } });
+    const plan = (m: AllocationMember, equippedStrong = false): AllocationPlan => ({
+      members: [m],
+      echoes: [...strong.map((e) => ({ ...e, equippedTo: equippedStrong ? 'jiyan' : null })), ...regen],
+      minLevel: 0,
+      dataStamp: 'test',
+    });
+
+    it('searches under the minimum: it needs four regen Echoes (4 x 5% = 20%), and without it the strong ones win', async () => {
+      const free = (await runAllocation(plan(member('jiyan', 'atk')), { run: inlineRun })).members[0];
+      expect(free.best?.echoIds).toEqual(['s0', 's1', 's2', 's3', 's4']);
+      const bound = (await runAllocation(plan(withMin()), { run: inlineRun })).members[0];
+      // Four regen Echoes reach 20%; the fifth slot goes to a strong Echo (ties keep the first).
+      expect(bound.best?.echoIds).toEqual(['r0', 'r1', 'r2', 'r3', 's0']);
+      expect(bound.best?.sheet.energyRegen).toBeGreaterThanOrEqual(0.2);
+    });
+
+    it('sends the minimum in the baseline request and every step, and nothing when there is none', async () => {
+      const seen: (OptimizeRequest['minStats'] | 'absent')[] = [];
+      const run: RunFn = (data, req) => {
+        seen.push('minStats' in req ? req.minStats : 'absent');
+        return inlineRun(data, req);
+      };
+      await runAllocation(plan(withMin(), true), { run });
+      expect(seen).toEqual([{ energyRegen: 0.2 }, { energyRegen: 0.2 }]); // baseline, then the search
+      seen.length = 0;
+      await runAllocation(plan({ ...member('jiyan', 'atk'), minStats: { energyRegen: 0, critRate: -1 } }, true), { run });
+      expect(seen).toEqual(['absent', 'absent']); // zero or negative is no minimum
+    });
+
+    it('scores the baseline under the same minimum: equipped Echoes below it are no baseline', async () => {
+      const free = (await runAllocation(plan(member('jiyan', 'atk'), true), { run: inlineRun })).members[0];
+      expect(free.baseline).not.toBeNull();
+      const bound = (await runAllocation(plan(withMin(), true), { run: inlineRun })).members[0];
+      expect(bound).toMatchObject({ baseline: null, baselineNote: expect.stringContaining("below the build's minimum stats") });
+      // With no minimum the note never mentions one.
+      const tooCostly = (await runAllocation(
+        { ...plan(member('jiyan', 'atk')), costBudget: 10, echoes: strong.map((e) => ({ ...e, cost: 4 as const, equippedTo: 'jiyan' })) },
+        { run: inlineRun },
+      )).members[0];
+      expect(tooCostly.baselineNote).not.toContain('minimum');
+    });
+
+    it('says so when no combination can meet the minimum', async () => {
+      const impossible: AllocationMember = { ...member('jiyan', 'atk'), minStats: { energyRegen: 5 } };
+      const { members } = await runAllocation(plan(impossible), { run: inlineRun });
+      expect(members[0].best).toBeNull();
+    });
+  });
+
   describe('cost budget', () => {
     // 4 + 3 + 3 + 1 + 1 = 12: legal under 12, over a budget of 10.
     const costs: (1 | 3 | 4)[] = [4, 3, 3, 1, 1];
@@ -388,6 +442,17 @@ describe('planKey', () => {
     const m = member('jiyan', 'atk');
     expect(planKey({ ...base, members: [{ ...m, context: { ...m.context, enemy: standardMob(80) } }] })).not.toBe(key);
     expect(planKey({ ...base })).toBe(key);
+  });
+
+  it("changes with a member's minimum stats (empty, zero and absent are the same)", () => {
+    const m = member('jiyan', 'atk');
+    const withMin = (minStats: AllocationMember['minStats']): AllocationPlan => ({ ...base, members: [{ ...m, minStats }] });
+    expect(planKey(withMin({ energyRegen: 0.2 }))).not.toBe(key);
+    expect(planKey(withMin({ energyRegen: 0.2 }))).not.toBe(planKey(withMin({ energyRegen: 0.25 })));
+    expect(planKey(withMin({ energyRegen: 0.2, critRate: 0.6 }))).toBe(planKey(withMin({ critRate: 0.6, energyRegen: 0.2 })));
+    expect(planKey(withMin({}))).toBe(key);
+    expect(planKey(withMin({ energyRegen: 0 }))).toBe(key);
+    expect(planKey(withMin(undefined))).toBe(key);
   });
 
   it('changes with the cost budget (absent means the default 12)', () => {

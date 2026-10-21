@@ -21,7 +21,7 @@ import { useRosterStore } from '../../state/roster.ts';
 import { useSnapshotStore } from '../../state/snapshotStore.ts';
 import { useTeamStore } from '../../state/teamStore.ts';
 import { echoDisplayName } from '../echoDisplay.ts';
-import { RESONANCE_MODE_LABELS } from '../format.ts';
+import { formatMinStats, RESONANCE_MODE_LABELS } from '../format.ts';
 import { btnGhost, btnOutline, btnPrimary, labelClass, selectClass } from './classes.ts';
 import { MarkEquipped, type MarkedEquipped } from './MarkEquipped.tsx';
 import { Alert } from './ui.tsx';
@@ -306,6 +306,9 @@ export function TeamAllocation({
                   {`Resonance Mode: ${RESONANCE_MODE_LABELS[r.member.context.resonanceMode]} (saved with the build).`}
                 </p>
               )}
+              {r.ok && r.member.minStats !== undefined && (
+                <p className="mt-1 text-xs text-fog">{`Minimum stats: ${formatMinStats(r.member.minStats)} (saved with the build).`}</p>
+              )}
               {r.ok ? (
                 <p className="mt-1 text-xs text-fog">
                   {r.enemySource === 'build'
@@ -323,7 +326,7 @@ export function TeamAllocation({
       {priorityError !== null && <p className="text-xs text-amber">{`The new order wasn't saved: ${priorityError}`}</p>}
 
       <p className="text-xs text-fog">
-        {`Builds saved with an enemy use it. The rest use the Calculator's current settings (${enemyText({ kind: enemyKind, level: enemyLevel, baseRES: enemyBaseRES })}), which aren't saved and reset to the defaults (mob, Lv 90, 10% RES) when the page reloads. Every member searches under a cost budget of ${costBudget}, the same budget your equipped Echoes are checked against, with no Sonata lock.`}
+        {`Builds saved with an enemy use it. The rest use the Calculator's current settings (${enemyText({ kind: enemyKind, level: enemyLevel, baseRES: enemyBaseRES })}), which aren't saved and reset to the defaults (mob, Lv 90, 10% RES) when the page reloads. Builds saved with minimum stats keep them, for the search and for the comparison with your equipped Echoes. Every member searches under a cost budget of ${costBudget}, the same budget your equipped Echoes are checked against, with no Sonata lock.`}
       </p>
 
       <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
@@ -380,7 +383,7 @@ export function TeamAllocation({
           <p className="font-display text-lg font-semibold text-ink">Preview</p>
           {stale && (
             <Alert tone="warning" role="status">
-              Your inputs changed since this preview (inventory, builds, order, enemy, Resonance Mode, cost budget or
+              Your inputs changed since this preview (inventory, builds, order, enemy, Resonance Mode, minimum stats, cost budget or
               minimum level). Run it again before saving.
             </Alert>
           )}
@@ -398,7 +401,11 @@ export function TeamAllocation({
                   <p className="text-xs text-fog tnum">{`Priority ${index + 1} · ${name}`}</p>
                   {m.best === null ? (
                     <p className="mt-1 text-sm text-amber">
-                      {`No legal build from the Echoes left (${m.pool} available to ${name}). They take nothing.`}
+                      {`No legal build from the Echoes left (${m.pool} available to ${name})${
+                        preview.resolved.some((r) => r.ok && r.characterId === m.characterId && r.member.minStats !== undefined)
+                          ? ' that meets the build\'s minimum stats'
+                          : ''
+                      }. They take nothing.`}
                     </p>
                   ) : (
                     <>

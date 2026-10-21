@@ -99,6 +99,18 @@ describe('locked Echoes', () => {
   });
 });
 
+describe('minimum stats', () => {
+  it('never leak into a share link', async () => {
+    const bound: Build = { ...build, minStats: { energyRegen: 0.2, critRate: 0.6 } };
+    const payload = sharedBuildFromLibrary({ build: bound, roster, inventory, includeObjective: true });
+    expect(JSON.stringify(payload)).not.toContain('minStats');
+    expect(JSON.stringify(payload)).not.toContain('energyRegen');
+    expect(await encodeSharedBuild(payload)).toBe(
+      await encodeSharedBuild(sharedBuildFromLibrary({ build, roster, inventory, includeObjective: true })),
+    );
+  });
+});
+
 describe('v1 links (legacy)', () => {
   it('round-trips a build, unicode included', () => {
     const hash = encodeBuildLink(build);

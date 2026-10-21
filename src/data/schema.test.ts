@@ -96,6 +96,23 @@ describe('user-data schemas', () => {
     expect(() => buildSchema.parse({ ...base, resonanceMode: '' })).toThrow();
   });
 
+  it('accepts a build with the minimum stats its run used, as non-negative sheet values', () => {
+    const base = {
+      id: 'b1',
+      name: 'My build',
+      characterId: 'denia',
+      weaponId: 'augment',
+      echoIds: ['a', 'b', 'c', 'd', 'e'],
+      objectiveId: 'Rotation DPR',
+      updatedAt: new Date().toISOString(),
+    };
+    expect(buildSchema.parse({ ...base, minStats: { energyRegen: 0.2, critRate: 0.7 } }).minStats).toEqual({ energyRegen: 0.2, critRate: 0.7 });
+    expect(Object.keys(buildSchema.parse(base))).not.toContain('minStats');
+    expect(() => buildSchema.parse({ ...base, minStats: { energyRegen: -0.1 } })).toThrow();
+    expect(() => buildSchema.parse({ ...base, minStats: { notAStat: 0.1 } })).toThrow();
+    expect(() => buildSchema.parse({ ...base, minStats: { energyRegen: Number.NaN } })).toThrow();
+  });
+
   it('keeps a team priority, and parses a malformed one as absent', () => {
     const team = { id: 't', name: 'T', characterIds: ['a', 'b', 'c'] };
     expect(teamSchema.parse({ ...team, priority: ['c', 'a', 'b'] }).priority).toEqual(['c', 'a', 'b']);

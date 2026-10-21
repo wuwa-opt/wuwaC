@@ -180,6 +180,37 @@ describe('resolveMember', () => {
   });
 });
 
+describe('minimum stats', () => {
+  it("passes the build's minimums to the member, dropping zero ones, and none when absent", () => {
+    const saved = resolveMember(inputs({ builds: [mkBuild('b1', { minStats: { energyRegen: 0.2, critRate: 0 } })] }));
+    const none = resolveMember(inputs());
+    const empty = resolveMember(inputs({ builds: [mkBuild('b1', { minStats: {} })] }));
+    if (!saved.ok || !none.ok || !empty.ok) throw new Error('expected resolved members');
+    expect(saved.member.minStats).toEqual({ energyRegen: 0.2 });
+    expect(none.member).not.toHaveProperty('minStats');
+    expect(empty.member).not.toHaveProperty('minStats');
+  });
+
+  it('copies them onto the saved draft (a plain copy, valid under the schema)', () => {
+    const r = resolveMember(inputs({ builds: [mkBuild('b1', { minStats: { energyRegen: 0.2, critRate: 0.6 } })] }));
+    const plain = resolveMember(inputs());
+    const result = (characterId: string): AllocationResult['members'][number] => ({
+      characterId,
+      pool: 5,
+      best: { echoIds: ['e1', 'e2', 'e3', 'e4', 'e5'], score: 1, sheet: {} as never, warnings: [], appliedAssumptions: [] },
+      baseline: null,
+      baselineNote: 'x',
+    });
+    const [withMin] = allocationDrafts({ teamName: 'T', resolved: [r], allocation: { members: [result('jiyan')] }, characterName: (id) => id });
+    const [without] = allocationDrafts({ teamName: 'T', resolved: [plain], allocation: { members: [result('jiyan')] }, characterName: (id) => id });
+    expect(withMin.minStats).toEqual({ energyRegen: 0.2, critRate: 0.6 });
+    if (!r.ok) throw new Error('expected a resolved member');
+    expect(withMin.minStats).not.toBe(r.member.minStats);
+    expect(without).not.toHaveProperty('minStats');
+    expect(() => buildSchema.parse({ ...withMin, id: 'x', updatedAt: new Date().toISOString() })).not.toThrow();
+  });
+});
+
 describe('slotOrder', () => {
   it('puts the main Echo first and sorts the rest', () => {
     expect(slotOrder(['e', 'c', 'a', 'b', 'd'], 'c')).toEqual(['c', 'a', 'b', 'd', 'e']);

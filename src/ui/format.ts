@@ -65,6 +65,13 @@ const ATTRIBUTE_LABELS: Record<Attribute, string> = {
   Havoc: 'Havoc',
 };
 
+/** "Energy Regen ≥ 20%, Crit Rate ≥ 70%" for a build's minimum stats (stored order). */
+export function formatMinStats(minStats: Partial<Record<StatKey, number>>): string {
+  return (Object.entries(minStats) as [StatKey, number][])
+    .map(([stat, value]) => `${statLabel(stat)} ≥ ${formatStatValue(stat, value)}`)
+    .join(', ');
+}
+
 /** Human label for a stat key (form selects, list rows). */
 export function statLabel(stat: StatKey): string {
   switch (stat) {

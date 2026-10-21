@@ -707,6 +707,14 @@ export const buildSchema = z
      * check it against the character's modes and ignore anything else.
      */
     resonanceMode: z.string().min(1).max(40).optional(),
+    /**
+     * Sheet-level minimums the optimizer run used (`OptimizeRequest.minStats`),
+     * as stored sheet values (fractions: 0.7 = 70% Crit Rate; Energy Regen is
+     * the sheet's bonus, which has no 100% base). Saved so team allocation and
+     * the unused-Echo finder honour them. Optional and unindexed: no Dexie
+     * bump, backup v1 unchanged. Never in share links.
+     */
+    minStats: z.partialRecord(statKeySchema, z.number().min(0)).optional(),
     updatedAt: z.string().datetime({ offset: true }),
   })
   .refine((b) => new Set(b.echoIds).size === b.echoIds.length, {

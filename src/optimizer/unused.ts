@@ -1,4 +1,5 @@
 import type { Build, CharacterData, OwnedEcho } from '../data/schema.ts';
+import { minStatKeys } from './minStats.ts';
 import { pruneDominated, pruneInputs, type PruneInputs } from './prune.ts';
 import { selectCandidates } from './search.ts';
 
@@ -26,10 +27,14 @@ import { selectCandidates } from './search.ts';
  * A locked Echo (`locked`) is never fodder: it stays `unused` with reason
  * `locked`, but still sits in the pool, so other Echoes' verdicts don't change.
  *
+ * A build's saved `minStats` count: a stat it has a minimum on is relevant to
+ * pruning (like the search does), so a dominator must be at least as strong in
+ * it too, and an Echo carrying that stat isn't dropped by a weaker one.
+ *
  * Limits, on purpose:
  * - Top-1 only: a top-N run (N > 1) may still rank a combo holding it.
- * - Only the saved builds' objectives: any other objective, character or
- *   minimum (builds don't store `minStats`) may still want it.
+ * - Only the saved builds' objectives and minimums: any other objective,
+ *   character or minimum may still want it.
  * - Minimum level 0 only: a run with `minLevel > 0` searches a smaller
  *   pool, where the dominators may be missing (below that level).
  * Builds without an `objective` count for membership only. A build whose
@@ -116,7 +121,7 @@ function droppedBy(build: Build, pool: OwnedEcho[], characters: readonly Charact
   if (character === undefined || build.objective === undefined) return null;
   let inputs: PruneInputs;
   try {
-    inputs = pruneInputs(character, build.objective);
+    inputs = pruneInputs(character, build.objective, minStatKeys(build.minStats));
   } catch {
     return null; // e.g. the objective's skill is gone from the snapshot
   }

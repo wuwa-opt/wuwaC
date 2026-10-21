@@ -6,6 +6,7 @@ import type {
   RotationBlockSpec,
   RotationBuffSpec,
   SonataSetData,
+  StatKey,
   WeaponData,
 } from '../../data/schema.ts';
 import type { ResonanceMode } from '../../domain/characterMods.ts';
@@ -14,7 +15,9 @@ import type { EnemySettings } from '../../optimizer/allocateMembers.ts';
 import { runOptimization, type OptimizationHandle } from '../../optimizer/worker.ts';
 import { selectCandidates, type OptimizeRequest, type SearchData, type SearchResult } from '../../optimizer/search.ts';
 import { useLibraryStore } from '../../state/library.ts';
+import { parseDisplayValue } from '../format.ts';
 import { btnOutline, btnPrimary, labelClass, selectClass } from './classes.ts';
+import { Collapsible } from './Collapsible.tsx';
 import { Alert, Window } from './ui.tsx';
 
 type Status =
@@ -44,6 +47,18 @@ interface RotationOptimizerProps {
 }
 
 /**
+ * The optional minimum-stat inputs, in the order shown. Typed as % and stored
+ * as sheet fractions (`parseDisplayValue`), which is what `minStats` expects.
+ * Crit Rate/Crit DMG sheet values include the 5%/150% bases; Energy Regen is
+ * the sheet's bonus only (no base is seeded), so it reads as a bonus.
+ */
+const MIN_STAT_FIELDS: { stat: StatKey; label: string; hint?: string }[] = [
+  { stat: 'energyRegen', label: 'Energy Regen %', hint: 'Bonus only — the base isn\'t counted' },
+  { stat: 'critRate', label: 'Crit Rate %' },
+  { stat: 'critDmg', label: 'Crit DMG %' },
+];
+
+/**
  * Minimal rotation optimizer: budget + Top N + run, ranked by rotation DPR
  * (DPS ranks identically — time is constant). Results apply straight into
  * the Calculator loadout or save to the build library with the full spec.
@@ -63,6 +78,8 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
   // Candidate filters; the defaults search the whole inventory (as before).
   const [excludeEquipped, setExcludeEquipped] = useState(false);
   const [minLevel, setMinLevel] = useState('0');
+  // Empty = no minimum for that stat.
+  const [minTexts, setMinTexts] = useState<Partial<Record<StatKey, string>>>({});
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const [result, setResult] = useState<SearchResult | null>(null);
   const [lastRun, setLastRun] = useState<{ data: SearchData; request: OptimizeRequest; enemy: EnemySettings } | null>(null);
@@ -80,6 +97,7 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
     excludeEquippedElsewhere: excludeEquipped,
     minLevel: minLevelValid ? parsedMinLevel : 0,
   });
+  const activeMins = MIN_STAT_FIELDS.filter(({ stat }) => (minTexts[stat]?.trim() ?? '') !== '').length;
   const tooFew = echoes.length < 5;
   const tooFewCandidates = candidates.length < 5;
   const canRun = blocks.length > 0 && !tooFew && !tooFewCandidates;
@@ -102,6 +120,18 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
       setStatus({ kind: 'error', message: 'Pick two different Sonata sets for the 2+2 lock.' });
       return;
     }
+    const minStats: Partial<Record<StatKey, number>> = {};
+    for (const { stat, label } of MIN_STAT_FIELDS) {
+      const text = minTexts[stat]?.trim() ?? '';
+      if (text === '') continue;
+      try {
+        const value = parseDisplayValue(stat, text);
+        if (value > 0) minStats[stat] = value;
+      } catch {
+        setStatus({ kind: 'error', message: `Minimum ${label.replace(' %', '')} must be a non-negative number (in %), or empty for no minimum.` });
+        return;
+      }
+    }
     const data: SearchData = { character, weapon, roster, echoes: candidates, sonataSets, enemy, resonanceMode };
     const request: OptimizeRequest = {
       costBudget: budget === '10' ? 10 : 12,
@@ -112,6 +142,7 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
             ? { mode: 'twoPlusTwo', setIdA: lockSetA, setIdB: lockSetB }
             : { mode: 'none' },
       objective: { kind: 'rotation-dpr', blocks, buffs, globalBuffIds, crit },
+      ...(Object.keys(minStats).length === 0 ? {} : { minStats }),
       topN: parsedTopN,
     };
     const usedEnemy = { ...enemySettings };
@@ -177,6 +208,7 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
       },
       // The run's enemy and mode, so team allocation re-runs it as scored here.
       enemy: { ...lastRun.enemy },
+      ...(lastRun.request.minStats === undefined ? {} : { minStats: { ...lastRun.request.minStats } }),
       ...(lastRun.data.resonanceMode === undefined ? {} : { resonanceMode: lastRun.data.resonanceMode }),
     });
     setSavingKey(null);
@@ -254,6 +286,28 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
             <input type="checkbox" checked={excludeEquipped} onChange={() => setExcludeEquipped((v) => !v)} />
             <span>Skip echoes equipped on other characters</span>
           </label>
+        </div>
+        <div className="mt-3">
+          <Collapsible title={<span className="text-base">{`Minimum stats${activeMins > 0 ? ` (${activeMins} set)` : ''}`}</span>}>
+            <p className="mt-1 text-xs text-fog">
+              Only builds whose stats meet every minimum count. Leave a box empty for no minimum.
+            </p>
+            <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              {MIN_STAT_FIELDS.map(({ stat, label, hint }) => (
+                <div key={stat}>
+                  <label htmlFor={`ropt-min-${stat}`} className={labelClass}>{`Minimum ${label}`}</label>
+                  <input
+                    id={`ropt-min-${stat}`}
+                    value={minTexts[stat] ?? ''}
+                    onChange={(e) => setMinTexts((m) => ({ ...m, [stat]: e.target.value }))}
+                    inputMode="decimal"
+                    className={`${selectClass} mt-0.5`}
+                  />
+                  {hint && <p className="mt-0.5 text-xs text-fog">{hint}</p>}
+                </div>
+              ))}
+            </div>
+          </Collapsible>
         </div>
         <p className="mt-2 text-xs text-fog tnum">
           Searching {candidates.length.toLocaleString()} of {echoes.length.toLocaleString()} echoes.

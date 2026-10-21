@@ -191,6 +191,7 @@ describe('backup', () => {
       characterId: 'denia',
       enemy: { kind: 'boss', level: 100, baseRES: 0.2 },
       resonanceMode: 'tuneStrain',
+      minStats: { energyRegen: 0.2, critRate: 0.6 },
     };
     const ordered: Team = { ...team, id: 'team-ordered', priority: ['rover', 'jiyan', 'verina'] };
 
@@ -209,7 +210,7 @@ describe('backup', () => {
       expect(await db.teams.get('team-1')).toStrictEqual(team);
     });
 
-    it('round-trips a build with enemy and mode, and a team with a priority', async () => {
+    it('round-trips a build with enemy, mode and minimum stats, and a team with a priority', async () => {
       await db.builds.add(withSettings);
       await db.teams.add(ordered);
       const json = JSON.parse(JSON.stringify(await createBackup())) as unknown;

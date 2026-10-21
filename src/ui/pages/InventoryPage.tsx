@@ -572,7 +572,7 @@ export function InventoryPage() {
                 ? ' — needs a saved build with an objective to check against; save one from the optimizer.'
                 : usageCounts.unchecked
                   ? ' — a saved build no longer matches current game data, so nothing is marked fodder.'
-                  : ` — for every saved build with an objective (${usageCounts.checked}), the optimizer finds an equally good best result without them, even with Echoes equipped elsewhere excluded. Top result at minimum level 0 only; other objectives may still want them.`}
+                  : ` — for every saved build with an objective (${usageCounts.checked}), the optimizer finds an equally good best result without them, even with Echoes equipped elsewhere excluded. Each build's saved minimum stats (e.g. Energy Regen) count, so an Echo a build needs to meet its minimum is kept. Top result at minimum level 0 only; other objectives or minimums may still want them.`}
             </p>
           )}
           {fodderShown.length > 0 && (

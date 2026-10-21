@@ -9,8 +9,11 @@ import { useLibraryStore } from '../../state/library.ts';
 import { MAX_KAMERA_BYTES } from '../readFile.ts';
 import { fakeSizedFile } from '../testFile.ts';
 import { InventoryPage } from './InventoryPage.tsx';
+import { ToastHost } from '../components/ToastHost.tsx';
+import { resetToastsForTests } from '../toasts.ts';
 
 beforeEach(async () => {
+  resetToastsForTests();
   await db.ownedEchoes.clear();
   await db.builds.clear();
   useInventoryStore.setState({ echoes: [], loaded: false });
@@ -33,13 +36,13 @@ async function selectEcho(user: ReturnType<typeof userEvent.setup>, name: string
 
 describe('InventoryPage', () => {
   it('shows an empty state with zero echoes', async () => {
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
     expect(await screen.findByText(/no echoes yet/i)).toBeInTheDocument();
   });
 
   it('adds an echo through the form and persists it', async () => {
     const user = userEvent.setup();
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
     await screen.findByText(/no echoes yet/i);
 
     await addEchoViaUi(user, 'Page Echo');
@@ -53,7 +56,7 @@ describe('InventoryPage', () => {
 
   it('falls back to the def name without a nickname', async () => {
     const user = userEvent.setup();
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
     await screen.findByText(/no echoes yet/i);
 
     await addEchoViaUi(user);
@@ -63,7 +66,7 @@ describe('InventoryPage', () => {
 
   it('edits a nickname', async () => {
     const user = userEvent.setup();
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
     await addEchoViaUi(user, 'Page Echo');
 
     const status = await selectEcho(user, 'Page Echo');
@@ -80,9 +83,41 @@ describe('InventoryPage', () => {
     expect(rows[0].label).toBe('Renamed');
   });
 
+  it('clearing the secondary stat and nickname in the edit form clears them, but keeps equippedTo and the lock', async () => {
+    await db.ownedEchoes.add({
+      id: 'gear',
+      label: 'Worn',
+      echoDefId: 'hooscamp',
+      sonataId: 'sierra-gale',
+      cost: 1,
+      level: 25,
+      rarity: 5,
+      mainStat: { stat: 'atkPct', value: 0.18 },
+      secondMainStat: { stat: 'hp', value: 2280 },
+      substats: [],
+      equippedTo: 'jiyan',
+      origin: 'import:test',
+      locked: true,
+    });
+    const user = userEvent.setup();
+    render(<><InventoryPage /><ToastHost /></>);
+    await screen.findByRole('table');
+    const status = await selectEcho(user, 'Worn');
+    await user.click(within(status).getByRole('button', { name: /edit/i }));
+    expect(screen.getByLabelText(/secondary stat value/i)).toHaveValue('2280');
+    await user.clear(screen.getByLabelText(/secondary stat value/i));
+    await user.clear(screen.getByLabelText(/nickname/i));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(async () => expect(await db.ownedEchoes.get('gear')).not.toHaveProperty('secondMainStat'));
+    const row = await db.ownedEchoes.get('gear');
+    expect(row).not.toHaveProperty('label');
+    expect(row).toMatchObject({ equippedTo: 'jiyan', locked: true, origin: 'import:test', level: 25 });
+  });
+
   it('deletes an echo and returns to the empty state', async () => {
     const user = userEvent.setup();
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
     await addEchoViaUi(user, 'Page Echo');
 
     const status = await selectEcho(user, 'Page Echo');
@@ -94,7 +129,7 @@ describe('InventoryPage', () => {
 
   it('locks an echo: Delete is disabled until unlocked, and the lock persists', async () => {
     const user = userEvent.setup();
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
     await addEchoViaUi(user, 'Page Echo');
     const status = await selectEcho(user, 'Page Echo');
 
@@ -115,7 +150,7 @@ describe('InventoryPage', () => {
 
   it('offers Undo after a delete and puts the same row back', async () => {
     const user = userEvent.setup();
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
     await addEchoViaUi(user, 'Page Echo');
     const [before] = await db.ownedEchoes.toArray();
 
@@ -133,7 +168,7 @@ describe('InventoryPage', () => {
 
   it('drops the Undo offer when the inventory reloads', async () => {
     const user = userEvent.setup();
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
     await addEchoViaUi(user, 'Page Echo');
     const status = await selectEcho(user, 'Page Echo');
     await user.click(within(status).getByRole('button', { name: /delete/i }));
@@ -146,7 +181,7 @@ describe('InventoryPage', () => {
 
   it('shows errors and writes nothing when no Echo is picked', async () => {
     const user = userEvent.setup();
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
     await screen.findByText(/no echoes yet/i);
 
     await user.click(screen.getByRole('button', { name: /add echo/i }));
@@ -180,7 +215,7 @@ describe('InventoryPage', () => {
     };
     await db.ownedEchoes.bulkAdd([lingering, thunder]);
     const user = userEvent.setup();
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
 
     expect(await screen.findByText('Lingering One')).toBeInTheDocument();
     expect(screen.getByText('Thunder One')).toBeInTheDocument();
@@ -210,7 +245,7 @@ describe('InventoryPage', () => {
       origin: 'manual',
     });
     const user = userEvent.setup();
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
 
     await screen.findByText('Lingering One');
     await user.selectOptions(screen.getByLabelText(/sonata set/i), 'void-thunder');
@@ -219,7 +254,7 @@ describe('InventoryPage', () => {
 
   it('previews a Kamera file and imports the matchable rows', async () => {
     const user = userEvent.setup();
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
     await screen.findByText(/no echoes yet/i);
 
     const file = new File(
@@ -259,7 +294,7 @@ describe('InventoryPage', () => {
 
   it('cancels an import preview without writing anything', async () => {
     const user = userEvent.setup();
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
     await screen.findByText(/no echoes yet/i);
 
     const file = new File(
@@ -289,7 +324,7 @@ describe('InventoryPage', () => {
 
   it('alerts on a non-JSON import file', async () => {
     const user = userEvent.setup();
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
     await screen.findByText(/no echoes yet/i);
 
     const file = new File(['definitely not json'], 'echoes.json', { type: 'application/json' });
@@ -301,7 +336,7 @@ describe('InventoryPage', () => {
 
   it('refuses an oversized import file before reading it', async () => {
     const user = userEvent.setup();
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
     await screen.findByText(/no echoes yet/i);
 
     const { file, text } = fakeSizedFile(MAX_KAMERA_BYTES + 1, 'echoes.json');
@@ -344,7 +379,7 @@ describe('InventoryPage', () => {
       });
     try {
       const user = userEvent.setup();
-      render(<InventoryPage />);
+      render(<><InventoryPage /><ToastHost /></>);
       await screen.findByText('Hooscamp');
 
       await user.click(screen.getByRole('button', { name: /^export$/i }));
@@ -384,7 +419,7 @@ describe('InventoryPage', () => {
     };
     await db.ownedEchoes.add(orphan);
     const user = userEvent.setup();
-    render(<InventoryPage />);
+    render(<><InventoryPage /><ToastHost /></>);
 
     expect(await screen.findByText(/re-linking — press edit/i)).toBeInTheDocument();
     expect(screen.getByText(/needs re-link:/i)).toBeInTheDocument();
@@ -420,7 +455,7 @@ describe('InventoryPage', () => {
     it('puts substats in aligned columns and shows roll tiers in the Status window', async () => {
       await db.ownedEchoes.add(base);
       const user = userEvent.setup();
-      render(<InventoryPage />);
+      render(<><InventoryPage /><ToastHost /></>);
       await screen.findByText('Alpha');
 
       const row = screen.getByText('Alpha').closest('tr')!;
@@ -443,7 +478,7 @@ describe('InventoryPage', () => {
         { ...base, id: 'b', label: 'Bravo', cost: 3, mainStat: { stat: 'atkPct', value: 0.3 } },
       ]);
       const user = userEvent.setup();
-      render(<InventoryPage />);
+      render(<><InventoryPage /><ToastHost /></>);
       await screen.findByText('Alpha');
 
       const tile = screen.getByRole('button', { name: /3-cost/ });
@@ -459,7 +494,7 @@ describe('InventoryPage', () => {
 
     it('summarises the box in the speech bubble', async () => {
       await db.ownedEchoes.add(base);
-      render(<InventoryPage />);
+      render(<><InventoryPage /><ToastHost /></>);
       expect(await screen.findByText(/You're holding 1 echo across 1 Sonata set/)).toBeInTheDocument();
     });
   });
@@ -510,7 +545,7 @@ describe('InventoryPage', () => {
       await db.ownedEchoes.bulkAdd([...strong, spare, big]);
       await db.builds.add(build);
       const user = userEvent.setup();
-      render(<InventoryPage />);
+      render(<><InventoryPage /><ToastHost /></>);
       await screen.findByText('Spare');
 
       expect(await screen.findByText('2 unused')).toBeInTheDocument();
@@ -541,7 +576,7 @@ describe('InventoryPage', () => {
       const spare2: OwnedEcho = { ...spare, id: 'spare2', label: 'Spare 2', mainStat: { stat: 'atkPct', value: 0.09 } };
 
       async function openFodderFilter(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-        render(<InventoryPage />);
+        render(<><InventoryPage /><ToastHost /></>);
         await screen.findByText('Spare');
         await screen.findByText('2 safe fodder');
         await user.selectOptions(screen.getByLabelText(/usage/i), 'fodder');
@@ -554,7 +589,7 @@ describe('InventoryPage', () => {
 
       it('is only offered under the Safe fodder filter', async () => {
         const user = userEvent.setup();
-        render(<InventoryPage />);
+        render(<><InventoryPage /><ToastHost /></>);
         await screen.findByText('2 safe fodder');
         expect(screen.queryByRole('button', { name: /safe-fodder/i })).not.toBeInTheDocument();
         await user.selectOptions(screen.getByLabelText(/usage/i), 'unused');
@@ -594,7 +629,7 @@ describe('InventoryPage', () => {
       it('excludes locked Echoes from the count and the delete', async () => {
         await db.ownedEchoes.update('spare2', { locked: true });
         const user = userEvent.setup();
-        render(<InventoryPage />);
+        render(<><InventoryPage /><ToastHost /></>);
         await screen.findByText('Spare');
         expect(await screen.findByText('1 safe fodder')).toBeInTheDocument();
         expect(screen.getByText('1 locked')).toBeInTheDocument();
@@ -649,7 +684,7 @@ describe('InventoryPage', () => {
 
     it('explains that safe fodder needs a saved build with an objective', async () => {
       await db.ownedEchoes.bulkAdd([spare, big]);
-      render(<InventoryPage />);
+      render(<><InventoryPage /><ToastHost /></>);
       expect(await screen.findByText('2 unused')).toBeInTheDocument();
       expect(screen.getByText('0 safe fodder')).toBeInTheDocument();
       expect(screen.getByText(/needs a saved build with an objective/)).toBeInTheDocument();

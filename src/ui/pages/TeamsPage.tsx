@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { TEAM_BUFFS } from '../../data/teamBuffs.ts';
 import { teamSonataCoverage } from '../../domain/teams.ts';
 import { useInventoryStore } from '../../state/inventory.ts';
@@ -8,8 +8,8 @@ import { useTeamStore } from '../../state/teamStore.ts';
 import { GameIcon } from '../components/GameIcon.tsx';
 import { statLabel, toDisplayValue } from '../format.ts';
 import { btnDangerGhost, btnPrimary, inputClass, labelClass } from '../components/classes.ts';
-import { Skeleton, ToastStack } from '../components/feedback.tsx';
-import { UNDO_TOAST_MS, useToasts } from '../toasts.ts';
+import { Skeleton } from '../components/feedback.tsx';
+import { dismissToast, INVENTORY_UNDO_SCOPE, pushToast, UNDO_TOAST_MS } from '../toasts.ts';
 import { Collapsible } from '../components/Collapsible.tsx';
 import type { MarkedEquipped } from '../components/MarkEquipped.tsx';
 import { TeamAllocation } from '../components/TeamAllocation.tsx';
@@ -27,26 +27,16 @@ export function TeamsPage() {
   const inventoryLoaded = useInventoryStore((s) => s.loaded);
   const loadInventory = useInventoryStore((s) => s.load);
   const restoreEquipped = useInventoryStore((s) => s.restoreEquipped);
-  const generation = useInventoryStore((s) => s.generation);
   const snapshot = useSnapshotStore((s) => s.snapshot);
   const ensureSnapshotLoaded = useSnapshotStore((s) => s.ensureLoaded);
 
   const [name, setName] = useState('');
   const [members, setMembers] = useState(['', '', '']);
   const [error, setError] = useState<string | null>(null);
-  const { toasts, push: pushToast, dismiss: dismissToast, hold: holdToast } = useToasts();
-
-  // Undo toasts for "Mark as equipped" (in memory only; a reload invalidates them).
-  const equipUndoToasts = useRef(new Set<number>());
 
   useEffect(() => {
     if (!loaded) void load();
   }, [loaded, load]);
-  useEffect(() => {
-    for (const id of equipUndoToasts.current) dismissToast(id);
-    equipUndoToasts.current.clear();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire on generation change only
-  }, [generation]);
   useEffect(() => {
     if (!inventoryLoaded) void loadInventory();
   }, [inventoryLoaded, loadInventory]);
@@ -70,7 +60,7 @@ export function TeamsPage() {
           dismissToast(toastId);
           removeBuilds(ids)
             .then((removed) => pushToast(`Removed ${removed.length} saved ${removed.length === 1 ? 'build' : 'builds'}.`))
-            .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Undo failed.'));
+            .catch((err: unknown) => pushToast(err instanceof Error ? err.message : 'Undo failed.', 'danger'));
         },
       },
     });
@@ -85,11 +75,12 @@ export function TeamsPage() {
       'success',
       {
         timeoutMs: UNDO_TOAST_MS,
+        // Outlives this page; ToastHost drops it when a reload (backup restore) invalidates it.
+        scope: INVENTORY_UNDO_SCOPE,
         action: {
           label: 'Undo',
           onAction: () => {
             dismissToast(toastId);
-            equipUndoToasts.current.delete(toastId);
             if (useInventoryStore.getState().generation !== issuedAt) return;
             restoreEquipped(previous, applied)
               .then(({ restored, skipped }) =>
@@ -99,12 +90,11 @@ export function TeamsPage() {
                     : `Restored the record for ${noun(restored.length)}; ${noun(skipped.length)} changed since, left as is.`,
                 ),
               )
-              .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Undo failed.'));
+              .catch((err: unknown) => pushToast(err instanceof Error ? err.message : 'Undo failed.', 'danger'));
           },
         },
       },
     );
-    equipUndoToasts.current.add(toastId);
   };
 
   const handleCreate = async (): Promise<void> => {
@@ -276,7 +266,6 @@ export function TeamsPage() {
           </ul>
         )}
       </div>
-      <ToastStack toasts={toasts} onDismiss={dismissToast} onHold={holdToast} />
     </section>
   );
 }

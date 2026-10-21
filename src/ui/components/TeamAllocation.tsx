@@ -21,7 +21,7 @@ import { useRosterStore } from '../../state/roster.ts';
 import { useSnapshotStore } from '../../state/snapshotStore.ts';
 import { useTeamStore } from '../../state/teamStore.ts';
 import { echoDisplayName } from '../echoDisplay.ts';
-import { formatMinStats, RESONANCE_MODE_LABELS } from '../format.ts';
+import { formatEnemy, formatMinStats, RESONANCE_MODE_LABELS } from '../format.ts';
 import { btnGhost, btnOutline, btnPrimary, labelClass, selectClass } from './classes.ts';
 import { MarkEquipped, type MarkedEquipped } from './MarkEquipped.tsx';
 import { Alert } from './ui.tsx';
@@ -40,9 +40,6 @@ interface Preview {
 }
 
 const num = (n: number): string => Math.round(n).toLocaleString();
-
-const enemyText = (e: { kind: string; level: number; baseRES: number }): string =>
-  `${e.kind === 'boss' ? 'boss' : 'mob'}, Lv ${e.level}, ${Math.round(e.baseRES * 100)}% base RES`;
 
 /**
  * Team-wide Echo allocation for one saved team: each member in priority
@@ -312,8 +309,8 @@ export function TeamAllocation({
               {r.ok ? (
                 <p className="mt-1 text-xs text-fog">
                   {r.enemySource === 'build'
-                    ? `Enemy: ${enemyText(r.enemy)} (saved with the build).`
-                    : `Enemy: ${enemyText(r.enemy)} (the Calculator's current settings; this build saved none).`}
+                    ? `Enemy: ${formatEnemy(r.enemy)} (saved with the build).`
+                    : `Enemy: ${formatEnemy(r.enemy)} (the Calculator's current settings; this build saved none).`}
                 </p>
               ) : (
                 <p className="mt-1 text-xs text-amber">{r.reason}</p>
@@ -326,7 +323,7 @@ export function TeamAllocation({
       {priorityError !== null && <p className="text-xs text-amber">{`The new order wasn't saved: ${priorityError}`}</p>}
 
       <p className="text-xs text-fog">
-        {`Builds saved with an enemy use it. The rest use the Calculator's current settings (${enemyText({ kind: enemyKind, level: enemyLevel, baseRES: enemyBaseRES })}), which aren't saved and reset to the defaults (mob, Lv 90, 10% RES) when the page reloads. Builds saved with minimum stats keep them, for the search and for the comparison with your equipped Echoes. Every member searches under a cost budget of ${costBudget}, the same budget your equipped Echoes are checked against, with no Sonata lock.`}
+        {`Builds saved with an enemy use it. The rest use the Calculator's current settings (${formatEnemy({ kind: enemyKind, level: enemyLevel, baseRES: enemyBaseRES })}), which aren't saved and reset to the defaults (mob, Lv 90, 10% RES) when the page reloads. Builds saved with minimum stats keep them, for the search and for the comparison with your equipped Echoes. Every member searches under a cost budget of ${costBudget}, the same budget your equipped Echoes are checked against, with no Sonata lock.`}
       </p>
 
       <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-4">

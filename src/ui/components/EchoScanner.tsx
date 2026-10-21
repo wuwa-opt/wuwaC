@@ -2,7 +2,7 @@ import { useRef, useState, type DragEvent } from 'react';
 import type { Snapshot } from '../../data/schema.ts';
 import { SCAN_ORIGIN } from '../../scanner/draft.ts';
 import { reviewRows, summarize, type ReviewRow } from '../../scanner/review.ts';
-import { useInventoryStore, type EchoDraft } from '../../state/inventory.ts';
+import { useInventoryStore, type EchoFormDraft } from '../../state/inventory.ts';
 import { useScanStore } from '../../state/scanStore.ts';
 import { useSnapshotStore } from '../../state/snapshotStore.ts';
 import { formatStatValue, statLabel, toDisplayValue } from '../format.ts';
@@ -288,7 +288,7 @@ function ScanRow({
   snapshot: Snapshot;
   fixing: boolean;
   onFix: () => void;
-  onFixed: (draft: EchoDraft) => void;
+  onFixed: (draft: EchoFormDraft) => void;
   onInclude: (include: boolean) => void;
   onEquip: (characterId: string | null) => void;
   onRemove: () => void;

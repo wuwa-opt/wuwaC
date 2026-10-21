@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadBundledSnapshot } from '../data/index.ts';
 import { ownedEchoSchema } from '../data/schema.ts';
 import { db } from './db.ts';
-import { useInventoryStore, type EchoDraft } from './inventory.ts';
+import { useInventoryStore, type EchoDraft, type EchoFormDraft } from './inventory.ts';
 import { resetSnapshotStoreForTests, useSnapshotStore } from './snapshotStore.ts';
 
 const draft: EchoDraft = {
@@ -88,53 +88,84 @@ describe('inventory store', () => {
     expect(await db.ownedEchoes.count()).toBe(0);
   });
 
-  it('updateEcho patches fields and persists', async () => {
+  /** What the Echo form submits: every form-owned field, never equippedTo/locked/origin. */
+  const formFields = (over: Partial<EchoFormDraft> = {}): EchoFormDraft => {
+    const fields: EchoDraft = { ...draft, ...over };
+    delete fields.equippedTo;
+    delete fields.locked;
+    return fields;
+  };
+
+  it('replaceEcho saves the edited fields and persists', async () => {
     const created = await useInventoryStore.getState().addEcho(draft);
-    const updated = await useInventoryStore.getState().updateEcho(created.id, {
-      mainStat: { stat: 'atkPct', value: 0.1 },
-    });
+    const updated = await useInventoryStore.getState().replaceEcho(created.id, formFields({ mainStat: { stat: 'atkPct', value: 0.1 } }));
     expect(updated.mainStat.value).toBeCloseTo(0.1, 10);
-    expect(await db.ownedEchoes.get(created.id)).toMatchObject({
-      mainStat: { stat: 'atkPct', value: 0.1 },
-    });
+    expect(await db.ownedEchoes.get(created.id)).toMatchObject({ mainStat: { stat: 'atkPct', value: 0.1 } });
   });
 
-  it('updateEcho keeps the def id when only the label changes', async () => {
+  it('replaceEcho keeps id, origin, equippedTo and locked (the form never shows them)', async () => {
+    const created = await useInventoryStore.getState().addEcho({ ...draft, equippedTo: 'jiyan' });
+    await useInventoryStore.getState().setLocked([created.id], true);
+    const updated = await useInventoryStore.getState().replaceEcho(created.id, formFields({ level: 20 }));
+    expect(updated).toMatchObject({ id: created.id, origin: 'manual', level: 20, equippedTo: 'jiyan', locked: true });
+    expect(await db.ownedEchoes.get(created.id)).toMatchObject({ level: 20, equippedTo: 'jiyan', locked: true });
+    expect(useInventoryStore.getState().echoes[0]).toEqual(updated);
+  });
+
+  it('replaceEcho keeps an unlocked, unequipped Echo that way (no `locked` key appears)', async () => {
     const created = await useInventoryStore.getState().addEcho(draft);
-    const updated = await useInventoryStore.getState().updateEcho(created.id, {
-      label: 'Hooscamp Alpha',
-    });
+    const updated = await useInventoryStore.getState().replaceEcho(created.id, formFields({ level: 3 }));
+    expect(updated.equippedTo).toBeNull();
+    expect(updated).not.toHaveProperty('locked');
+  });
+
+  it('replaceEcho ignores equippedTo, locked, origin and id even if a caller smuggles them in', async () => {
+    const created = await useInventoryStore.getState().addEcho({ ...draft, equippedTo: 'jiyan' });
+    const sneaky = { ...formFields(), equippedTo: null, locked: true, origin: 'evil', id: 'other' } as EchoFormDraft;
+    const updated = await useInventoryStore.getState().replaceEcho(created.id, sneaky);
+    expect(updated).toMatchObject({ id: created.id, origin: 'manual', equippedTo: 'jiyan' });
+    expect(updated).not.toHaveProperty('locked');
+  });
+
+  it('replaceEcho clears optional fields the form left out (nickname, second main stat, substats)', async () => {
+    const created = await useInventoryStore.getState().addEcho(draft);
+    expect(created).toMatchObject({ label: 'Hooscamp', secondMainStat: { stat: 'atk', value: 100 } });
+    const bare = formFields({ substats: [] });
+    delete bare.label;
+    delete bare.secondMainStat;
+    const updated = await useInventoryStore.getState().replaceEcho(created.id, bare);
+    expect(updated).not.toHaveProperty('label');
+    expect(updated).not.toHaveProperty('secondMainStat');
+    expect(updated.substats).toEqual([]);
+    const stored = await db.ownedEchoes.get(created.id);
+    expect(stored).not.toHaveProperty('label');
+    expect(stored).not.toHaveProperty('secondMainStat');
+    expect(stored?.substats).toEqual([]);
+  });
+
+  it('replaceEcho keeps the def id when only the label changes', async () => {
+    const created = await useInventoryStore.getState().addEcho(draft);
+    const updated = await useInventoryStore.getState().replaceEcho(created.id, formFields({ label: 'Hooscamp Alpha' }));
     expect(updated.echoDefId).toBe('hooscamp');
     expect(updated.label).toBe('Hooscamp Alpha');
   });
 
-  it('updateEcho keeps equippedTo and locked when the patch omits them (what the Echo form submits)', async () => {
-    const created = await useInventoryStore.getState().addEcho({ ...draft, equippedTo: 'jiyan' });
-    await useInventoryStore.getState().setLocked([created.id], true);
-    const formDraft: EchoDraft = { ...draft, level: 20 };
-    delete formDraft.equippedTo;
-    const updated = await useInventoryStore.getState().updateEcho(created.id, formDraft);
-    expect(updated).toMatchObject({ level: 20, equippedTo: 'jiyan', locked: true });
-    expect(await db.ownedEchoes.get(created.id)).toMatchObject({ level: 20, equippedTo: 'jiyan', locked: true });
-  });
-
   it('addEcho without equippedTo starts unequipped', async () => {
-    const formDraft: EchoDraft = { ...draft };
-    delete formDraft.equippedTo;
-    const created = await useInventoryStore.getState().addEcho(formDraft);
+    const created = await useInventoryStore.getState().addEcho(formFields());
     expect(created.equippedTo).toBeNull();
   });
 
-  it('updateEcho rejects def-inconsistent patches', async () => {
+  it('replaceEcho rejects def-inconsistent edits and leaves state and Dexie as they were', async () => {
     const created = await useInventoryStore.getState().addEcho(draft);
     const store = useInventoryStore.getState();
-    await expect(store.updateEcho(created.id, { cost: 4 })).rejects.toThrow(/1-cost Echo/);
-    await expect(store.updateEcho(created.id, { echoDefId: 'no-such-echo' })).rejects.toThrow(/unknown echo definition/);
+    await expect(store.replaceEcho(created.id, formFields({ cost: 4 }))).rejects.toThrow(/1-cost Echo/);
+    await expect(store.replaceEcho(created.id, formFields({ echoDefId: 'no-such-echo' }))).rejects.toThrow(/unknown echo definition/);
     expect(useInventoryStore.getState().echoes[0].cost).toBe(1);
+    expect((await db.ownedEchoes.get(created.id))?.cost).toBe(1);
   });
 
-  it('updateEcho throws for unknown ids', async () => {
-    await expect(useInventoryStore.getState().updateEcho('missing', {})).rejects.toThrow(/unknown echo/);
+  it('replaceEcho throws for unknown ids', async () => {
+    await expect(useInventoryStore.getState().replaceEcho('missing', formFields())).rejects.toThrow(/unknown echo/);
   });
 
   it('importEchoes bulk-adds with the import origin, keeping existing rows', async () => {
@@ -350,10 +381,13 @@ describe('inventory store: locks', () => {
     expect(useInventoryStore.getState().echoes.map((e) => e.id)).toEqual([b.id]);
   });
 
-  it('updateEcho keeps the lock', async () => {
+  it('replaceEcho keeps the lock', async () => {
     const [a] = await seed(1);
     await useInventoryStore.getState().setLocked([a.id], true);
-    const updated = await useInventoryStore.getState().updateEcho(a.id, { level: 20 });
+    const fields: EchoDraft = { ...a, level: 20 };
+    delete fields.equippedTo;
+    delete fields.locked;
+    const updated = await useInventoryStore.getState().replaceEcho(a.id, fields);
     expect(updated.locked).toBe(true);
     expect((await db.ownedEchoes.get(a.id))?.locked).toBe(true);
   });
@@ -482,7 +516,7 @@ describe('inventory store: active snapshot', () => {
     const store = useInventoryStore.getState();
     const created = await store.addEcho(newDef());
     expect(created.echoDefId).toBe('published-later');
-    const updated = await store.updateEcho(created.id, { level: 10 });
+    const updated = await store.replaceEcho(created.id, { ...newDef(), level: 10 });
     expect(updated.level).toBe(10);
     const [imported] = await store.importEchoes([newDef()], 'import:test');
     expect(imported.echoDefId).toBe('published-later');

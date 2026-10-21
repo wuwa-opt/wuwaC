@@ -19,6 +19,13 @@ export type EchoDraft = Omit<OwnedEcho, 'id' | 'origin' | 'equippedTo'> & {
   equippedTo?: string | null;
 };
 
+/**
+ * What the Echo form owns: every field a user edits. A submit REPLACES these
+ * (so clearing the nickname or the second main stat works), while the store
+ * keeps the fields the form never shows: `id`, `origin`, `equippedTo`, `locked`.
+ */
+export type EchoFormDraft = Omit<EchoDraft, 'equippedTo' | 'locked'>;
+
 /** Row-level def problems. `orphan` = unknown def; the rest = known-def mismatch. */
 export interface EchoDefIssue {
   kind: 'orphan' | 'cost' | 'sonata' | 'mainStat';
@@ -67,7 +74,12 @@ interface InventoryState {
   loaded: boolean;
   load: () => Promise<void>;
   addEcho: (draft: EchoDraft) => Promise<OwnedEcho>;
-  updateEcho: (id: string, patch: Partial<EchoDraft>) => Promise<OwnedEcho>;
+  /**
+   * Save an edit from the Echo form: `fields` replace every form-owned field
+   * (an absent optional one is cleared), and the row keeps its `id`, `origin`,
+   * `equippedTo` and `locked` whatever the caller passes.
+   */
+  replaceEcho: (id: string, fields: EchoFormDraft) => Promise<OwnedEcho>;
   /** Delete one Echo; resolves to the exact row removed (for undo). Throws on an unknown or locked id. */
   removeEcho: (id: string) => Promise<OwnedEcho>;
   /**
@@ -149,12 +161,23 @@ export const useInventoryStore = create<InventoryState>()((set, get) => ({
     return row;
   },
 
-  updateEcho: async (id, patch) => {
+  replaceEcho: async (id, fields) => {
     const existing = get().echoes.find((e) => e.id === id);
     if (!existing) throw new Error(`unknown echo: ${JSON.stringify(id)}`);
-    const merged = { ...existing, ...patch };
-    assertDefConsistent(merged);
-    const row = ownedEchoSchema.parse(merged);
+    assertDefConsistent(fields);
+    // The kept fields come from the stored row alone: a stray key on `fields`
+    // (the type forbids them, a cast would not) can neither set nor clear them.
+    // An absent optional field is cleared, not stored as `undefined`.
+    const edited: Record<string, unknown> = Object.fromEntries(
+      Object.entries(fields).filter(([key, value]) => value !== undefined && !['id', 'origin', 'equippedTo', 'locked'].includes(key)),
+    );
+    const row = ownedEchoSchema.parse({
+      ...edited,
+      id,
+      origin: existing.origin,
+      equippedTo: existing.equippedTo,
+      ...(existing.locked === true ? { locked: true } : {}),
+    });
     await db.ownedEchoes.put(row);
     set((s) => ({ echoes: s.echoes.map((e) => (e.id === id ? row : e)) }));
     return row;

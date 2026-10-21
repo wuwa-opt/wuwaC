@@ -8,7 +8,7 @@ import { db } from '../../state/db.ts';
 import { useInventoryStore } from '../../state/inventory.ts';
 import { useLibraryStore, type BuildDraft } from '../../state/library.ts';
 import { useRosterStore } from '../../state/roster.ts';
-import { decodeShareLink, encodeBuildLink, encodeSharedBuild } from '../../state/share.ts';
+import { decodeShareLink, encodeBuildLink, encodeSharedBuild, referenceBuildFrom } from '../../state/share.ts';
 import { useAppStore } from '../../state/store.ts';
 import { BuildsPage } from './BuildsPage.tsx';
 
@@ -106,6 +106,122 @@ describe('BuildsPage', () => {
     render(<BuildsPage />);
     expect(await screen.findByText('Seeded Build')).toBeInTheDocument();
     expect(screen.getByText(/99\.5/)).toBeInTheDocument();
+  });
+
+  describe('build details', () => {
+    const detailed: BuildDraft = {
+      ...seed,
+      context: { ...myRoster, level: 80, resonanceChain: 2, weaponLevel: 90, weaponRank: 3 },
+      objective: { kind: 'expected-damage', skillId: LIBERATION, motionName: 'Lance of Qingloong Stage 1 DMG', forteLevel: 10, crit: 'expected' },
+      enemy: { kind: 'boss', level: 100, baseRES: 0.2 },
+      minStats: { energyRegen: 0.2, critRate: 0.6 },
+    };
+
+    it('is collapsed until asked, then lists the five Echoes with slot 1 marked, plus the weapon and saved run settings', async () => {
+      const user = userEvent.setup();
+      await db.ownedEchoes.bulkAdd(ownEchoes);
+      await useLibraryStore.getState().saveBuild(detailed);
+      render(<BuildsPage />);
+      await screen.findByText('Seeded Build');
+      expect(screen.queryByRole('list', { name: 'Build Echoes' })).not.toBeInTheDocument();
+      const toggle = screen.getByRole('button', { name: /show details for seeded build/i });
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+      await user.click(toggle);
+      expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      const region = screen.getByRole('region', { name: /details for seeded build/i });
+      expect(toggle).toHaveAttribute('aria-controls', region.id);
+      const rows = within(within(region).getByRole('list', { name: 'Build Echoes' })).getAllByRole('listitem');
+      expect(rows).toHaveLength(5);
+      expect(rows[0]).toHaveTextContent(/Slot 1 \(main\) · Feilian Beringal/);
+      expect(rows[0]).toHaveTextContent('4-cost');
+      expect(rows[0]).toHaveTextContent('+25');
+      expect(rows[0]).toHaveTextContent('Sierra Gale');
+      expect(rows[0]).toHaveTextContent('Crit Rate 22%');
+      expect(rows[1]).toHaveTextContent(/Slot 2 · Hoochief/);
+      expect(rows[1]).not.toHaveTextContent('Slot 1');
+      expect(rows[4]).toHaveTextContent(/Slot 5 · Chirpuff/);
+      expect(region).toHaveTextContent(/Weapon\s*Verdant Summit Lv 90 R3/);
+      expect(region).toHaveTextContent(/Character\s*Lv 80 · S2/);
+      expect(region).toHaveTextContent(/Enemy\s*boss, Lv 100, 20% base RES/);
+      expect(region).toHaveTextContent(/Minimum stats\s*Energy Regen ≥ 20%, Crit Rate ≥ 60%/);
+      expect(region).toHaveTextContent('rotation saved');
+      expect(screen.queryByText(/missing/i)).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /hide details for seeded build/i }));
+      expect(screen.queryByRole('region', { name: /details for seeded build/i })).not.toBeInTheDocument();
+    });
+
+    it('omits settings the build did not save, and an unknown Resonance Mode', async () => {
+      const user = userEvent.setup();
+      await db.ownedEchoes.bulkAdd(ownEchoes);
+      await useLibraryStore.getState().saveBuild({ ...seed, resonanceMode: 'tuneStrain' }); // Jiyan has no modes
+      render(<BuildsPage />);
+      await screen.findByText('Seeded Build');
+      await user.click(screen.getByRole('button', { name: /show details for seeded build/i }));
+      const region = screen.getByRole('region', { name: /details for seeded build/i });
+      expect(region).toHaveTextContent('Weapon');
+      for (const absent of ['Enemy', 'Minimum stats', 'Resonance Mode', 'Character']) {
+        expect(region).not.toHaveTextContent(absent);
+      }
+    });
+
+    it("shows a dual-mode character's saved Resonance Mode", async () => {
+      const user = userEvent.setup();
+      await db.ownedEchoes.bulkAdd(ownEchoes);
+      await useLibraryStore.getState().saveBuild({ ...seed, characterId: 'denia', weaponId: 'augment', resonanceMode: 'tuneStrain' });
+      render(<BuildsPage />);
+      await screen.findByText('Seeded Build');
+      await user.click(screen.getByRole('button', { name: /show details for seeded build/i }));
+      expect(screen.getByRole('region', { name: /details for seeded build/i })).toHaveTextContent(/Resonance Mode\s*Tune Strain/);
+    });
+
+    it('marks each deleted Echo in its slot, and on the card while collapsed', async () => {
+      const user = userEvent.setup();
+      await db.ownedEchoes.bulkAdd(ownEchoes.filter((e) => e.id !== 'c' && e.id !== 'e'));
+      await useLibraryStore.getState().saveBuild(seed);
+      render(<BuildsPage />);
+      const card = (await screen.findByText('Seeded Build')).closest('li')!;
+      expect(await within(card).findByText('2 Echoes missing')).toBeInTheDocument();
+
+      await user.click(within(card).getByRole('button', { name: /show details/i }));
+      const rows = within(within(card).getByRole('list', { name: 'Build Echoes' })).getAllByRole('listitem');
+      expect(rows[0]).toHaveTextContent('Feilian Beringal');
+      expect(rows[2]).toHaveTextContent('Slot 3 · Missing — this Echo was deleted from your inventory.');
+      expect(rows[3]).toHaveTextContent('Hooscamp');
+      expect(rows[4]).toHaveTextContent('Slot 5 · Missing');
+    });
+
+    it('says "1 Echo missing" in the singular, including when the main Echo is the one gone', async () => {
+      await db.ownedEchoes.bulkAdd(ownEchoes.filter((e) => e.id !== 'a'));
+      await useLibraryStore.getState().saveBuild(seed);
+      render(<BuildsPage />);
+      expect(await screen.findByText('1 Echo missing')).toBeInTheDocument();
+    });
+
+    it('marks nothing as missing before the inventory has loaded', async () => {
+      await useLibraryStore.getState().saveBuild(seed);
+      useInventoryStore.setState({ echoes: [], loaded: false, load: () => new Promise(() => {}) });
+      try {
+        render(<BuildsPage />);
+        await screen.findByText('Seeded Build');
+        expect(screen.queryByText(/missing/i)).not.toBeInTheDocument();
+        await userEvent.setup().click(screen.getByRole('button', { name: /show details/i }));
+        expect(screen.getAllByText(/Loading your inventory/i, { selector: 'li' })).toHaveLength(5);
+        expect(screen.queryByText(/Missing —/)).not.toBeInTheDocument();
+      } finally {
+        useInventoryStore.setState({ load: useInventoryStore.getInitialState().load });
+      }
+    });
+
+    it('offers no details for a saved reference build (it has its own Echoes)', async () => {
+      await useLibraryStore.getState().importBuilds([referenceBuildFrom(sharedPayload)]);
+      render(<BuildsPage />);
+      await screen.findByText('Friend Jiyan');
+      expect(screen.getByText('reference')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /show details/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/missing/i)).not.toBeInTheDocument();
+    });
   });
 
   it('deletes a build', async () => {

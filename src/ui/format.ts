@@ -65,6 +65,11 @@ const ATTRIBUTE_LABELS: Record<Attribute, string> = {
   Havoc: 'Havoc',
 };
 
+/** "mob, Lv 90, 10% base RES" for a saved enemy (Calculator settings). */
+export function formatEnemy(e: { kind: string; level: number; baseRES: number }): string {
+  return `${e.kind === 'boss' ? 'boss' : 'mob'}, Lv ${e.level}, ${Math.round(e.baseRES * 100)}% base RES`;
+}
+
 /** "Energy Regen ≥ 20%, Crit Rate ≥ 70%" for a build's minimum stats (stored order). */
 export function formatMinStats(minStats: Partial<Record<StatKey, number>>): string {
   return (Object.entries(minStats) as [StatKey, number][])

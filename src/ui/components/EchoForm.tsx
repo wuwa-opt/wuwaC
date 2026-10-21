@@ -3,7 +3,7 @@ import { findEchoDef } from '../../data/index.ts';
 import { MAIN_STAT_RANGES, SUB_STAT_TIERS } from '../../data/echoStats.ts';
 import { MAIN_STAT_POOLS, SUBSTAT_POOL } from '../../data/placeholders.ts';
 import type { StatKey } from '../../data/schema.ts';
-import type { EchoDraft } from '../../state/inventory.ts';
+import type { EchoFormDraft } from '../../state/inventory.ts';
 import { useSnapshotStore } from '../../state/snapshotStore.ts';
 import { isPercentStat, parseDisplayValue, statLabel, toDisplayValue } from '../format.ts';
 import { btnGhost, btnOutline, btnPrimary, chipClass, inputClass, labelClass } from './classes.ts';
@@ -24,7 +24,7 @@ export interface EchoFormValues {
 interface EchoFormProps {
   initial?: EchoFormValues;
   submitLabel: string;
-  onSubmit: (draft: EchoDraft) => void | Promise<void>;
+  onSubmit: (draft: EchoFormDraft) => void | Promise<void>;
 }
 
 const COST_FILTERS = [1, 3, 4] as const;
@@ -192,7 +192,7 @@ export function EchoForm({ initial, submitLabel, onSubmit }: EchoFormProps) {
 
     // Fixed secondary: flat HP on 1-cost, flat ATK on 3/4 (reference doc §2).
     const secondaryStat = def ? MAIN_STAT_POOLS[def.cost].secondary : null;
-    let secondMainStat: EchoDraft['secondMainStat'];
+    let secondMainStat: EchoFormDraft['secondMainStat'];
     const secondText = values.secondMainStat?.valueText.trim() ?? '';
     if (secondaryStat && secondText !== '') {
       try {
@@ -205,7 +205,7 @@ export function EchoForm({ initial, submitLabel, onSubmit }: EchoFormProps) {
       }
     }
 
-    const substats: EchoDraft['substats'] = [];
+    const substats: EchoFormDraft['substats'] = [];
     values.substats.forEach((row, i) => {
       try {
         substats.push({ stat: row.stat, value: parseDisplayValue(row.stat, row.valueText) });

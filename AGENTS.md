@@ -382,6 +382,10 @@ interface Team {
   OCR runtime is self-hosted under `ocr/<tesseract version>/` by the
   `ocrAssets` plugin in `vite.config.ts` (never precached, never a CDN;
   tesseract's own IndexedDB cache stays off — unprefixed store name).
+  Screenshots are checked by `scanner/imageLimits.ts` before any decode:
+  20 MiB, 16 MP (4K = 8.3 MP, 5K = 14.7 MP), PNG/JPEG/WebP only, with the
+  size read from the header. A refused file fails its own row with a
+  message, and the rest of the batch is read.
   Regression gate: `src/scanner/fixtures/panels.json` (real OCR words +
   hand-read truth) must keep ZERO silent errors. Real screenshots live
   only in gitignored `scan-fixtures/`; re-measure engine changes with
@@ -414,9 +418,10 @@ interface Team {
   - That covers the top-1 result at minimum level 0, for the saved
     objectives and minimums only. A build that can't be checked against the current
     snapshot blocks all fodder.
-- **Echo edits keep gear.** `EchoDraft.equippedTo` is optional. The Echo
-  form never submits it, so `updateEcho` (a merge) keeps `equippedTo` and
-  `locked`; a new Echo starts unequipped. Don't let a form write them.
+- **Echo edits.** The Echo form submits an `EchoFormDraft` (no
+  `equippedTo`, `locked`, `origin` or `id`). `replaceEcho` replaces every
+  form-owned field, so an absent optional one is cleared, and keeps those
+  four from the stored row. A new Echo starts unequipped.
 - **Def checks use the active snapshot.** `state/inventory.ts` and
   `EchoForm` read `useSnapshotStore`, never `loadBundledSnapshot()`. Only
   `data/`, `snapshotStore`, the dev seed and the Database page's bundled
@@ -429,8 +434,8 @@ interface Team {
     back verbatim under the same ids, with no schema parse (`load()` never
     validates rows), and never overwrites an id that exists again.
   - Undo lives in memory only. It is dropped when `load()` bumps
-    `generation` (a backup restore), when the toast goes, and when the
-    page unmounts.
+    `generation` (a backup restore) and when the toast goes. It survives a
+    section switch, because toasts live in one app-wide store.
 - **Team allocation** (Teams page, `ui/components/TeamAllocation.tsx`;
   optimizer side `optimizer/allocate.ts` + `allocateMembers.ts`). It is
   greedy, not a joint optimum, and the UI must keep saying so.
@@ -481,6 +486,19 @@ interface Team {
       dropped on an inventory `generation` change.
     - After marking, the preview is stale by design (`equippedTo` is in
       `planKey`): run again to compare against the new gear.
+- **Toasts.** One store (`ui/toasts.ts`: `pushToast`, `dismissToast`,
+  `holdToast`, `dismissToastScope`), rendered once by `ToastHost` in
+  `App.tsx`. Pages never render a `ToastStack`.
+  - Timers live in the store, so a toast and its Undo survive a section
+    switch.
+  - An Undo tied to the loaded inventory uses `scope:
+    INVENTORY_UNDO_SCOPE`; `ToastHost` drops that scope when
+    `useInventoryStore.generation` changes.
+  - A page test that expects a toast must render `<ToastHost />`.
+- **Builds page detail.** A saved own build's card expands (`BuildDetail`)
+  to its five Echoes as they are in the inventory now, plus the weapon and
+  the saved enemy, Resonance Mode and minimum stats. A deleted Echo is
+  marked in its slot and on the card. Reference builds have no detail view.
 - UI dynamics: live-feedback primitives in `src/ui/components/feedback.tsx` +
   `src/ui/toasts.ts`, motion hooks in `src/ui/motion.ts` (`useAnimatedNumber`,
   `useReveal` for scroll-in Windows, `useTypewriter` for the mascot bubble), command palette in

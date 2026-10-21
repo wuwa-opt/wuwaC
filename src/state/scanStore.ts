@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { ScanDraft } from '../scanner/draft.ts';
+import { screenshotProblem } from '../scanner/imageLimits.ts';
 import type { FrameWords } from '../scanner/engine.ts';
 import { parsePanel, type ScanBatch } from '../scanner/parse.ts';
 import type { ScanItem } from '../scanner/review.ts';
@@ -24,9 +25,15 @@ export interface ScanDeps {
   createReader: () => Promise<(image: Blob) => Promise<FrameWords>>;
   /** Panel-crop preview as an object URL (null = skip). */
   thumbnail: (image: Blob) => Promise<string | null>;
+  /**
+   * Why an image can't be scanned (size/format limits), or null when fine.
+   * Runs before any decode; absent = no check (fake deps in tests).
+   */
+  validate?: (image: File) => Promise<string | null>;
 }
 
 const browserDeps: ScanDeps = {
+  validate: screenshotProblem,
   createReader: async () => {
     const { createScanEngine } = await import('../scanner/engine.ts');
     const engine = await createScanEngine(2);
@@ -98,6 +105,17 @@ export const useScanStore = create<ScanState>()((set, get) => {
   };
 
   const readOne = async (id: string, image: File, batch: ScanBatch): Promise<void> => {
+    // A refused file fails on its own row; the rest of the batch carries on.
+    try {
+      const problem = (await deps.validate?.(image)) ?? null;
+      if (problem !== null) {
+        patchItem(id, { status: 'failed', error: problem });
+        return;
+      }
+    } catch (err) {
+      patchItem(id, { status: 'failed', error: err instanceof Error ? err.message : 'Could not check this image.' });
+      return;
+    }
     void deps
       .thumbnail(image)
       .then((thumbUrl) => {

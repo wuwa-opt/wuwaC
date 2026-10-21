@@ -143,6 +143,87 @@ describe('inventory store', () => {
     expect(stored?.substats).toEqual([]);
   });
 
+  describe('replaceEcho and substat rolls', () => {
+    // `rolls` can only arrive through a restored backup or pasted JSON, so the row is seeded in Dexie.
+    const seedRolled = async (): Promise<string> => {
+      await db.ownedEchoes.add({
+        ...formFields({
+          substats: [
+            { stat: 'critRate', value: 0.081, rolls: 2 },
+            { stat: 'atkPct', value: 0.09 },
+            { stat: 'critDmg', value: 0.126, rolls: 1 },
+          ],
+        }),
+        id: 'rolled',
+        origin: 'manual',
+        equippedTo: null,
+      });
+      await useInventoryStore.getState().load();
+      return 'rolled';
+    };
+
+    it('keeps a substat\'s rolls when an edit changes only the level', async () => {
+      const id = await seedRolled();
+      const { substats } = useInventoryStore.getState().echoes[0];
+      const updated = await useInventoryStore.getState().replaceEcho(id, formFields({ level: 20, substats: substats.map(({ stat, value }) => ({ stat, value })) }));
+      expect(updated.level).toBe(20);
+      expect(updated.substats).toEqual([
+        { stat: 'critRate', value: 0.081, rolls: 2 },
+        { stat: 'atkPct', value: 0.09 },
+        { stat: 'critDmg', value: 0.126, rolls: 1 },
+      ]);
+      expect((await db.ownedEchoes.get(id))?.substats).toEqual(updated.substats);
+    });
+
+    it('still matches a value the form round-tripped through display text', async () => {
+      const id = await seedRolled();
+      // 0.0007 -> "0.07" -> 0.07 / 100 is 0.0007000000000000001 in floating point.
+      await db.ownedEchoes.update(id, { substats: [{ stat: 'critRate', value: 0.0007, rolls: 3 }] });
+      await useInventoryStore.getState().load();
+      const updated = await useInventoryStore.getState().replaceEcho(id, formFields({ substats: [{ stat: 'critRate', value: 0.07 / 100 }] }));
+      expect(updated.substats).toEqual([{ stat: 'critRate', value: 0.07 / 100, rolls: 3 }]);
+    });
+
+    it('drops rolls from a substat whose value changed, but keeps the unchanged ones', async () => {
+      const id = await seedRolled();
+      const updated = await useInventoryStore.getState().replaceEcho(
+        id,
+        formFields({
+          substats: [
+            { stat: 'critRate', value: 0.087 },
+            { stat: 'atkPct', value: 0.09 },
+            { stat: 'critDmg', value: 0.126 },
+          ],
+        }),
+      );
+      expect(updated.substats[0]).toEqual({ stat: 'critRate', value: 0.087 });
+      expect(updated.substats[0]).not.toHaveProperty('rolls');
+      expect(updated.substats[2]).toEqual({ stat: 'critDmg', value: 0.126, rolls: 1 });
+      expect((await db.ownedEchoes.get(id))?.substats[0]).not.toHaveProperty('rolls');
+    });
+
+    it('drops rolls when the stat changes, and never moves them to another stat', async () => {
+      const id = await seedRolled();
+      const updated = await useInventoryStore.getState().replaceEcho(
+        id,
+        formFields({ substats: [{ stat: 'energyRegen', value: 0.081 }, { stat: 'critDmg', value: 0.126 }] }),
+      );
+      expect(updated.substats).toEqual([
+        { stat: 'energyRegen', value: 0.081 },
+        { stat: 'critDmg', value: 0.126, rolls: 1 },
+      ]);
+    });
+
+    it('gives a new Echo no rolls, and keeps what a caller submits explicitly', async () => {
+      const created = await useInventoryStore.getState().addEcho(formFields({ substats: [{ stat: 'critRate', value: 0.081 }] }));
+      expect(created.substats[0]).not.toHaveProperty('rolls');
+      const edited = await useInventoryStore.getState().replaceEcho(created.id, formFields({ substats: [{ stat: 'critRate', value: 0.081 }] }));
+      expect(edited.substats[0]).not.toHaveProperty('rolls');
+      const explicit = await useInventoryStore.getState().replaceEcho(created.id, formFields({ substats: [{ stat: 'critRate', value: 0.081, rolls: 4 }] }));
+      expect(explicit.substats[0].rolls).toBe(4);
+    });
+  });
+
   it('replaceEcho keeps the def id when only the label changes', async () => {
     const created = await useInventoryStore.getState().addEcho(draft);
     const updated = await useInventoryStore.getState().replaceEcho(created.id, formFields({ label: 'Hooscamp Alpha' }));

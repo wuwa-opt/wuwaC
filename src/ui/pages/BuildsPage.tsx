@@ -18,6 +18,7 @@ import { useAppStore } from '../../state/store.ts';
 import { downloadBlob } from '../download.ts';
 import { GameIcon } from '../components/GameIcon.tsx';
 import { BuildDetail } from '../components/BuildDetail.tsx';
+import { ReferenceBuildDetail } from '../components/ReferenceBuildDetail.tsx';
 import { missingSlots } from '../echoDisplay.ts';
 import { SharedBuildCard } from '../components/SharedBuildCard.tsx';
 import { btnDangerGhost, btnGhost, btnOutline, btnPrimary, inputClass, labelClass } from '../components/classes.ts';
@@ -326,7 +327,7 @@ export function BuildsPage() {
           <ul className="space-y-2">
             {builds.map((build) => {
               const own = !isReferenceBuild(build);
-              const open = own && expanded[build.id] === true;
+              const open = expanded[build.id] === true;
               // Only judged once the inventory is in; before that nothing is "missing".
               const missing = own && inventoryLoaded ? missingSlots(build, inventory) : [];
               return (
@@ -383,18 +384,16 @@ export function BuildsPage() {
                       />
                       + rotation
                     </label>
-                    {own && (
-                      <button
-                        type="button"
-                        aria-expanded={open}
-                        aria-controls={`build-detail-${build.id}`}
-                        aria-label={`${open ? 'Hide' : 'Show'} details for ${build.name}`}
-                        onClick={() => setExpanded((m) => ({ ...m, [build.id]: !open }))}
-                        className={`${btnGhost} px-2 py-1 text-xs`}
-                      >
-                        {open ? 'Hide details' : 'Details'}
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      aria-controls={`build-detail-${build.id}`}
+                      aria-label={`${open ? 'Hide' : 'Show'} details for ${build.name}`}
+                      onClick={() => setExpanded((m) => ({ ...m, [build.id]: !open }))}
+                      className={`${btnGhost} px-2 py-1 text-xs`}
+                    >
+                      {open ? 'Hide details' : 'Details'}
+                    </button>
                     <button
                       type="button"
                       disabled={!inventoryLoaded || !rosterLoaded}
@@ -412,15 +411,23 @@ export function BuildsPage() {
                     </button>
                   </div>
                 </div>
-                {open && (
-                  <BuildDetail
-                    id={`build-detail-${build.id}`}
-                    build={build}
-                    inventory={inventory}
-                    inventoryLoaded={inventoryLoaded}
-                    snapshot={snapshot}
-                  />
-                )}
+                {open &&
+                  (build.reference !== undefined ? (
+                    <ReferenceBuildDetail
+                      id={`build-detail-${build.id}`}
+                      build={build}
+                      reference={build.reference}
+                      snapshot={snapshot}
+                    />
+                  ) : (
+                    <BuildDetail
+                      id={`build-detail-${build.id}`}
+                      build={build}
+                      inventory={inventory}
+                      inventoryLoaded={inventoryLoaded}
+                      snapshot={snapshot}
+                    />
+                  ))}
               </li>
               );
             })}

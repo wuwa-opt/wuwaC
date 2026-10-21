@@ -1,5 +1,5 @@
 import { useAnimatedNumber } from '../motion.ts';
-import type { Toast } from '../toasts.ts';
+import type { HoldReason, Toast } from '../toasts.ts';
 
 /* Live-feedback primitives: animated readouts, bars, skeletons, toasts.
  * All motion degrades to instant under reduced motion (see motion.ts +
@@ -89,8 +89,27 @@ const TOAST_DOT: Record<Toast['tone'], string> = {
   danger: 'bg-ember',
 };
 
+/**
+ * An action toast usually follows deleting the control that had focus, which
+ * strands keyboard focus on <body>. Then (and only then) hand it to the action.
+ */
+function focusIfStranded(button: HTMLButtonElement | null): void {
+  if (button !== null && (document.activeElement === null || document.activeElement === document.body)) {
+    button.focus();
+  }
+}
+
 /** Fixed bottom-right toast stack. */
-export function ToastStack({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: number) => void }) {
+export function ToastStack({
+  toasts,
+  onDismiss,
+  onHold,
+}: {
+  toasts: Toast[];
+  onDismiss: (id: number) => void;
+  /** Pause/resume a toast's auto-dismiss while it is hovered or has focus. */
+  onHold?: (id: number, reason: HoldReason, held: boolean) => void;
+}) {
   if (toasts.length === 0) return null;
   return (
     <div aria-live="polite" className="fixed inset-x-4 bottom-20 z-50 flex flex-col gap-2 sm:inset-x-auto sm:right-4 sm:w-72 md:bottom-4">
@@ -98,10 +117,26 @@ export function ToastStack({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: 
         <div
           key={toast.id}
           role={toast.tone === 'danger' ? 'alert' : 'status'}
+          onMouseEnter={() => onHold?.(toast.id, 'hover', true)}
+          onMouseLeave={() => onHold?.(toast.id, 'hover', false)}
+          onFocus={() => onHold?.(toast.id, 'focus', true)}
+          onBlur={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onHold?.(toast.id, 'focus', false);
+          }}
           className={`animate-tt-toast flex items-center gap-2 border-2 px-3 py-2 text-sm shadow-lg ${TOAST_STYLES[toast.tone]}`}
         >
           <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${TOAST_DOT[toast.tone]}`} />
           <span className="min-w-0 flex-1">{toast.message}</span>
+          {toast.action !== undefined && (
+            <button
+              type="button"
+              ref={focusIfStranded}
+              onClick={toast.action.onAction}
+              className="shrink-0 border-2 border-line-strong px-2 py-0.5 text-xs font-bold text-accent-text hover:bg-panel-2"
+            >
+              {toast.action.label}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => onDismiss(toast.id)}

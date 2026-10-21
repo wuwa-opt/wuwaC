@@ -17,9 +17,9 @@ import { EchoScanner } from '../components/EchoScanner.tsx';
 import { EchoStatus } from '../components/EchoStatus.tsx';
 import { EchoTable } from '../components/EchoTable.tsx';
 import { Mascot } from '../components/Mascot.tsx';
-import { btnGhost, btnOutline, btnPrimary, inputClass } from '../components/classes.ts';
+import { btnDangerGhost, btnGhost, btnOutline, btnPrimary, inputClass } from '../components/classes.ts';
 import { AnimatedNumber, Skeleton, ToastStack } from '../components/feedback.tsx';
-import { useToasts } from '../toasts.ts';
+import { UNDO_TOAST_MS, useToasts } from '../toasts.ts';
 import { usePrefersReducedMotion, useTypewriter } from '../motion.ts';
 import { Alert, CostPips, EmptyState, PageHeader, Window } from '../components/ui.tsx';
 import { inventorySummary } from '../echoDisplay.ts';
@@ -48,6 +48,11 @@ function toFormValues(echo: OwnedEcho): EchoFormValues {
       valueText: toDisplayValue(s.stat, s.value),
     })),
   };
+}
+
+/** Stable ref callback: focus the safe default of a confirm step when it appears. */
+function focusOnMount(el: HTMLElement | null): void {
+  el?.focus();
 }
 
 /**
@@ -83,6 +88,9 @@ export function InventoryPage() {
   const addEcho = useInventoryStore((s) => s.addEcho);
   const updateEcho = useInventoryStore((s) => s.updateEcho);
   const removeEcho = useInventoryStore((s) => s.removeEcho);
+  const removeEchoes = useInventoryStore((s) => s.removeEchoes);
+  const restoreEchoes = useInventoryStore((s) => s.restoreEchoes);
+  const generation = useInventoryStore((s) => s.generation);
   const importEchoes = useInventoryStore((s) => s.importEchoes);
   const [adding, setAdding] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -94,9 +102,13 @@ export function InventoryPage() {
   const [seedSonata, setSeedSonata] = useState('');
   const [preview, setPreview] = useState<(KameraImportResult & { fileName: string }) | null>(null);
   const [transferError, setTransferError] = useState<string | null>(null);
-  const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
+  // Bulk-delete confirmation: the ids shown, valid only for the filters they were shown under.
+  const [fodderConfirm, setFodderConfirm] = useState<{ ids: string[]; filterKey: string } | null>(null);
+  const { toasts, push: pushToast, dismiss: dismissToast, hold: holdToast } = useToasts();
   const fileRef = useRef<HTMLInputElement>(null);
   const statusRef = useRef<HTMLDivElement>(null);
+  // Undo toasts and the inventory generation they were issued under (undo is in memory only).
+  const undoToasts = useRef(new Set<number>());
   const reducedMotion = usePrefersReducedMotion();
 
   const snapshot = useSnapshotStore((s) => s.snapshot);
@@ -114,6 +126,13 @@ export function InventoryPage() {
   useEffect(() => {
     if (!buildsLoaded) void loadBuilds();
   }, [buildsLoaded, loadBuilds]);
+
+  // A reload (backup restore, first load) invalidates every pending undo offer.
+  useEffect(() => {
+    for (const id of undoToasts.current) dismissToast(id);
+    undoToasts.current.clear();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire on generation change only
+  }, [generation]);
 
   // Derived, never stored. Until the library loads every unequipped Echo would read as unused.
   const usage = useMemo(
@@ -178,6 +197,61 @@ export function InventoryPage() {
       setTransferError(err instanceof Error ? err.message : 'Could not export the inventory.');
     }
   };
+
+  /** Toast with an Undo that puts exactly `rows` back (in memory only; gone on reload). */
+  const pushUndoToast = (message: string, rows: readonly OwnedEcho[]): void => {
+    const issuedAt = useInventoryStore.getState().generation;
+    const id = pushToast(message, 'success', {
+      timeoutMs: UNDO_TOAST_MS,
+      action: {
+        label: 'Undo',
+        onAction: () => {
+          dismissToast(id);
+          undoToasts.current.delete(id);
+          if (useInventoryStore.getState().generation !== issuedAt) return;
+          restoreEchoes(rows)
+            .then(({ restored, skipped }) => {
+              const noun = (n: number): string => `${n} ${n === 1 ? 'echo' : 'echoes'}`;
+              pushToast(
+                skipped.length === 0
+                  ? `Restored ${noun(restored.length)}.`
+                  : `Restored ${noun(restored.length)}; ${noun(skipped.length)} already back, left as is.`,
+              );
+            })
+            .catch((err: unknown) => setTransferError(err instanceof Error ? err.message : 'Undo failed.'));
+        },
+      },
+    });
+    undoToasts.current.add(id);
+  };
+
+  const deleteSafeFodder = (shownIds: readonly string[]): void => {
+    setFodderConfirm(null);
+    // Recompute now: the render the user confirmed on may be stale.
+    const fresh = findUnusedEchoes({
+      echoes: useInventoryStore.getState().echoes,
+      builds: useLibraryStore.getState().builds,
+      characters: useSnapshotStore.getState().snapshot.characters,
+    });
+    const safe = shownIds.filter((id) => fresh.get(id)?.status === 'fodder');
+    if (safe.length !== shownIds.length) {
+      setTransferError('The safe-fodder list changed since you opened it. Nothing was deleted — review it and try again.');
+      return;
+    }
+    removeEchoes(safe)
+      .then((removed) => {
+        setTransferError(null);
+        setSelectedId((cur) => (cur !== null && removed.some((r) => r.id === cur) ? null : cur));
+        if (removed.length > 0) {
+          pushUndoToast(
+            `Deleted ${removed.length} safe-fodder ${removed.length === 1 ? 'Echo' : 'Echoes'}.`,
+            removed,
+          );
+        }
+      })
+      .catch((err: unknown) => setTransferError(err instanceof Error ? err.message : 'Delete failed.'));
+  };
+
   const flagged = echoes.filter((e) => echoDefIssues(e, snapshot.echoDefs).length > 0);
   const activeUsageFilter: UsageFilter = usage === null ? 'all' : usageFilter;
   const filtering = sonataFilter !== '' || costFilter !== null || activeUsageFilter !== 'all';
@@ -188,6 +262,9 @@ export function InventoryPage() {
     usage ?? new Map(),
     activeUsageFilter,
   );
+  const filterKey = `${sonataFilter}|${costFilter ?? ''}|${activeUsageFilter}`;
+  const fodderShown = activeUsageFilter === 'fodder' ? visible.map((e) => e.id) : [];
+  const confirming = fodderConfirm !== null && fodderConfirm.filterKey === filterKey ? fodderConfirm : null;
   const selected = visible.find((e) => e.id === selectedId) ?? null;
   const countByCost = new Map<number, number>();
   for (const echo of echoes) countByCost.set(echo.cost, (countByCost.get(echo.cost) ?? 0) + 1);
@@ -489,6 +566,41 @@ export function InventoryPage() {
                   : ` — for every saved build with an objective (${usageCounts.checked}), the optimizer finds an equally good best result without them, even with Echoes equipped elsewhere excluded. Top result at minimum level 0 only; other objectives may still want them.`}
             </p>
           )}
+          {fodderShown.length > 0 && (
+            <div className="border-b-2 border-dashed border-line px-3 py-2">
+              {confirming === null ? (
+                <button
+                  type="button"
+                  onClick={() => setFodderConfirm({ ids: fodderShown, filterKey })}
+                  className={btnDangerGhost}
+                >
+                  {`Delete ${fodderShown.length} safe-fodder ${fodderShown.length === 1 ? 'Echo' : 'Echoes'}`}
+                </button>
+              ) : (
+                <div role="group" aria-label="Confirm bulk delete" className="space-y-2">
+                  <p className="text-sm">
+                    {`Delete ${confirming.ids.length} safe-fodder ${confirming.ids.length === 1 ? 'Echo' : 'Echoes'}? `}
+                    <span className="text-fog">
+                      An Undo button appears right after, for a few seconds. It is kept in memory only and is lost if you leave this page or reload.
+                    </span>
+                  </p>
+                  <div className="flex flex-wrap gap-3">
+                    <button type="button" onClick={() => deleteSafeFodder(confirming.ids)} className={btnDangerGhost}>
+                      {`Delete ${confirming.ids.length} ${confirming.ids.length === 1 ? 'Echo' : 'Echoes'}`}
+                    </button>
+                    <button
+                      type="button"
+                      ref={focusOnMount}
+                      onClick={() => setFodderConfirm(null)}
+                      className={btnGhost}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {!loaded ? (
             <div className="p-4">
               <Skeleton lines={4} />
@@ -531,15 +643,17 @@ export function InventoryPage() {
           snapshot={snapshot}
           onEdit={setEditing}
           onDelete={(id) => {
-            void removeEcho(id).then(() => {
-              setSelectedId((cur) => (cur === id ? null : cur));
-              pushToast('Echo deleted.');
-            });
+            removeEcho(id)
+              .then((row) => {
+                setSelectedId((cur) => (cur === id ? null : cur));
+                pushUndoToast('Echo deleted.', [row]);
+              })
+              .catch((err: unknown) => setTransferError(err instanceof Error ? err.message : 'Delete failed.'));
           }}
         />
         </div>
       </div>
-      <ToastStack toasts={toasts} onDismiss={dismissToast} />
+      <ToastStack toasts={toasts} onDismiss={dismissToast} onHold={holdToast} />
     </section>
   );
 }

@@ -3,7 +3,7 @@
  * `2` base, `3` shade, `4` highlight. Colours come from the
  * --color-icon-* tokens in src/index.css. */
 
-export type PixelIconName = 'chest' | 'head' | 'sword' | 'heart' | 'book' | 'disk';
+export type PixelIconName = 'chest' | 'head' | 'sword' | 'heart' | 'book' | 'disk' | 'lock';
 
 export type ColourIndex = '1' | '2' | '3' | '4';
 
@@ -93,6 +93,21 @@ export const PIXEL_ICONS: Record<PixelIconName, readonly string[]> = {
     '121411114121',
     '121444444121',
     '111111111111',
+  ],
+  // Not a section icon: marks a locked Echo.
+  lock: [
+    '....1111....',
+    '...122221...',
+    '...12..21...',
+    '...12..21...',
+    '.1111111111.',
+    '.1244222221.',
+    '.1222112221.',
+    '.1222112221.',
+    '.1222112221.',
+    '.1233333321.',
+    '.1333333331.',
+    '.1111111111.',
   ],
 };
 

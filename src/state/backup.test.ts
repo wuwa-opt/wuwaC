@@ -97,6 +97,27 @@ describe('backup', () => {
     expect(useRosterStore.getState().loaded).toBe(true);
   });
 
+  it('round-trips locked Echoes, and a backup from before locks still imports unlocked', async () => {
+    await db.ownedEchoes.bulkAdd([{ ...echoes[0], locked: true }, echoes[1]]);
+    const json = JSON.parse(JSON.stringify(await createBackup())) as {
+      tables: { ownedEchoes: Record<string, unknown>[] };
+    };
+    expect(json.tables.ownedEchoes.find((e) => e.id === echoes[0].id)?.locked).toBe(true);
+    expect(json.tables.ownedEchoes.find((e) => e.id === echoes[1].id)).not.toHaveProperty('locked');
+    await clearAll();
+
+    await restoreBackup(parseBackup(json), 'replace');
+    expect((await db.ownedEchoes.get(echoes[0].id))?.locked).toBe(true);
+    expect(await db.ownedEchoes.get(echoes[1].id)).not.toHaveProperty('locked');
+
+    // A pre-lock backup (rows never had the key) parses and restores as-is.
+    const old = { ...json, tables: { ...json.tables, ownedEchoes: json.tables.ownedEchoes.map((e) => Object.fromEntries(Object.entries(e).filter(([k]) => k !== 'locked'))) } };
+    await clearAll();
+    await restoreBackup(parseBackup(old), 'replace');
+    expect(await db.ownedEchoes.count()).toBe(2);
+    expect((await db.ownedEchoes.toArray()).some((e) => e.locked)).toBe(false);
+  });
+
   it('replace drops rows absent from the backup; merge keeps them', async () => {
     const backup = parseBackup(JSON.parse(JSON.stringify(await createBackup())) as unknown); // empty
     await db.teams.add(team);

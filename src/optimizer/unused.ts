@@ -23,6 +23,9 @@ import { selectCandidates } from './search.ts';
  *   build with an objective, the optimizer finds an equally good best
  *   result without this Echo.
  *
+ * A locked Echo (`locked`) is never fodder: it stays `unused` with reason
+ * `locked`, but still sits in the pool, so other Echoes' verdicts don't change.
+ *
  * Limits, on purpose:
  * - Top-1 only: a top-N run (N > 1) may still rank a combo holding it.
  * - Only the saved builds' objectives: any other objective, character or
@@ -41,6 +44,8 @@ export type EchoUsageReason =
   | 'equipped'
   /** in-use: listed in a saved library build. */
   | 'in-build'
+  /** unused: locked by the user, so never fodder (it still counts in the pruning pool). */
+  | 'locked'
   /** unused: no saved build carries an objective to check against. */
   | 'no-objective-builds'
   /** unused: a saved build's objective can't be checked against current game data. */
@@ -84,6 +89,8 @@ export function findUnusedEchoes(input: UnusedEchoInput): Map<string, EchoUsage>
       verdicts.set(echo.id, { status: 'in-use', reason: 'equipped', buildsChecked: 0 });
     } else if (inBuild.has(echo.id)) {
       verdicts.set(echo.id, { status: 'in-use', reason: 'in-build', buildsChecked: 0 });
+    } else if (echo.locked) {
+      verdicts.set(echo.id, { status: 'unused', reason: 'locked', buildsChecked });
     } else if (objectiveBuilds.length === 0) {
       verdicts.set(echo.id, { status: 'unused', reason: 'no-objective-builds', buildsChecked: 0 });
     } else {

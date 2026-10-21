@@ -33,6 +33,13 @@ describe('user-data schemas', () => {
     expect(ownedEchoSchema.parse(validEcho).id).toBe('echo-1');
   });
 
+  it('accepts locked: true or no lock, rejects any other lock value', () => {
+    expect(ownedEchoSchema.parse(validEcho).locked).toBeUndefined();
+    expect(ownedEchoSchema.parse({ ...validEcho, locked: true }).locked).toBe(true);
+    expect(() => ownedEchoSchema.parse({ ...validEcho, locked: false })).toThrow();
+    expect(() => ownedEchoSchema.parse({ ...validEcho, locked: 'yes' })).toThrow();
+  });
+
   it('rejects duplicate substats and bad costs', () => {
     expect(() =>
       ownedEchoSchema.parse({

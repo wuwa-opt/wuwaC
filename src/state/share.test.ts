@@ -90,6 +90,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('locked Echoes', () => {
+  it('never leak into a share link', async () => {
+    const locked = inventory.map((e) => ({ ...e, locked: true as const }));
+    const payload = sharedBuildFromLibrary({ build, roster, inventory: locked, includeObjective: false });
+    expect(JSON.stringify(payload)).not.toContain('locked');
+    expect(await encodeSharedBuild(payload)).toBe(await encodeSharedBuild(shared()));
+  });
+});
+
 describe('v1 links (legacy)', () => {
   it('round-trips a build, unicode included', () => {
     const hash = encodeBuildLink(build);

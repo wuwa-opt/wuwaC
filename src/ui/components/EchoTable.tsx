@@ -7,6 +7,7 @@ import { echoDisplayName, echoScore, sonataName } from '../echoDisplay.ts';
 import { formatStatValue, statLabel } from '../format.ts';
 import { sonataTint } from '../sonataTint.ts';
 import { GameIcon } from './GameIcon.tsx';
+import { PixelIcon } from './PixelIcon.tsx';
 import { CostPips, SegmentMeter } from './ui.tsx';
 
 /** Substats that get their own aligned column; everything else lands in "Other". */
@@ -98,6 +99,12 @@ export function EchoTable({ echoes, snapshot, selectedId, onSelect, usageTags }:
                         {name}
                       </button>
                       <span className="text-xs text-fog">{sonataName(snapshot, echo.sonataId)}</span>
+                      {echo.locked === true && (
+                        <span className="ml-2 inline-flex translate-y-[3px] items-center">
+                          <PixelIcon name="lock" size={12} />
+                          <span className="sr-only">Locked</span>
+                        </span>
+                      )}
                       {usageTag === 'fodder' && <span className="px-tag ml-2 px-1.5 py-px text-xs">fodder</span>}
                       {usageTag === 'unused' && (
                         <span className="ml-2 inline-flex border-2 border-line px-1.5 text-xs text-fog">unused</span>

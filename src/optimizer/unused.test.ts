@@ -84,6 +84,36 @@ describe('findUnusedEchoes', () => {
     expect(verdicts.get('weak')).toEqual({ status: 'fodder', reason: 'dominated', buildsChecked: 1 });
   });
 
+  it('never marks a locked Echo fodder, and leaves every other verdict unchanged', () => {
+    const lockedWeak = { ...weak, locked: true as const };
+    const base = findUnusedEchoes({ echoes: pool, builds: [atkBuild], characters });
+    const withLock = findUnusedEchoes({
+      echoes: pool.map((e) => (e.id === 'weak' ? lockedWeak : e)),
+      builds: [atkBuild],
+      characters,
+    });
+    expect(base.get('weak')?.status).toBe('fodder');
+    expect(withLock.get('weak')).toEqual({ status: 'unused', reason: 'locked', buildsChecked: 1 });
+    // It stays in the pool: nothing else changes (strong2 is still kept, not newly "fodder").
+    for (const echo of pool) {
+      if (echo.id !== 'weak') expect(withLock.get(echo.id)).toEqual(base.get(echo.id));
+    }
+  });
+
+  it('keeps a locked Echo in the pruning pool so it still counts as a dominator', () => {
+    // weak2 (atk 8) is dominated by strong1, strong2 and the locked strong3 (k = 2 needs 2 dominators):
+    // drop strong2 from the pool and the locked strong3 is the dominator that keeps weak2 fodder.
+    const strong3 = { ...mkEcho('strong3', 4, { atk: 95 }), locked: true as const };
+    const weak2 = mkEcho('weak2', 4, { atk: 8 });
+    const verdicts = findUnusedEchoes({
+      echoes: [strong1, strong3, weak2, ...fillers(4)],
+      builds: [atkBuild],
+      characters,
+    });
+    expect(verdicts.get('weak2')?.status).toBe('fodder');
+    expect(verdicts.get('strong3')).toEqual({ status: 'unused', reason: 'locked', buildsChecked: 1 });
+  });
+
   it('skips reference builds for membership and for objectives', () => {
     const reference = mkBuild('ref', ['strong2', 'weak', ...fillerIds(3)], maxStat('critRate'), {
       reference: {} as SharedBuild,

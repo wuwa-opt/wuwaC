@@ -56,14 +56,20 @@ interface InventoryState {
   load: () => Promise<void>;
   addEcho: (draft: EchoDraft) => Promise<OwnedEcho>;
   updateEcho: (id: string, patch: Partial<EchoDraft>) => Promise<OwnedEcho>;
-  /** Delete one Echo; resolves to the exact row removed (for undo). Throws on an unknown id. */
+  /** Delete one Echo; resolves to the exact row removed (for undo). Throws on an unknown or locked id. */
   removeEcho: (id: string) => Promise<OwnedEcho>;
   /**
    * Delete many Echoes in one Dexie transaction. Resolves to the exact rows
-   * removed (read inside the transaction); unknown ids are ignored. State is
-   * only touched after the transaction commits.
+   * removed (read inside the transaction); unknown ids are ignored and locked
+   * Echoes are skipped (never deleted). State is only touched after the
+   * transaction commits.
    */
   removeEchoes: (ids: readonly string[]) => Promise<OwnedEcho[]>;
+  /**
+   * Lock or unlock Echoes in one Dexie transaction. Resolves to the rows that
+   * changed; unknown ids and Echoes already in that state are ignored.
+   */
+  setLocked: (ids: readonly string[], locked: boolean) => Promise<OwnedEcho[]>;
   /**
    * Put rows from `removeEchoes` back under their original ids (so builds and
    * `equippedTo` resolve again), in one Dexie transaction. Takes ONLY
@@ -87,6 +93,14 @@ interface InventoryState {
 function toRow(draft: EchoDraft, id: string, origin = 'manual'): OwnedEcho {
   assertDefConsistent(draft);
   return ownedEchoSchema.parse({ ...draft, id, origin });
+}
+
+/** `locked: true` or no `locked` key at all — never `locked: false`. */
+function withLock(row: OwnedEcho, locked: boolean): OwnedEcho {
+  const next = { ...row };
+  if (locked) next.locked = true;
+  else delete next.locked;
+  return next;
 }
 
 export const useInventoryStore = create<InventoryState>()((set, get) => ({
@@ -119,20 +133,38 @@ export const useInventoryStore = create<InventoryState>()((set, get) => ({
 
   removeEcho: async (id) => {
     const [row] = await get().removeEchoes([id]);
-    if (!row) throw new Error(`unknown echo: ${JSON.stringify(id)}`);
-    return row;
+    if (row) return row;
+    const existing = await db.ownedEchoes.get(id);
+    if (existing?.locked) throw new Error('this Echo is locked — unlock it to delete it');
+    throw new Error(`unknown echo: ${JSON.stringify(id)}`);
   },
 
   removeEchoes: async (ids) => {
     const wanted = [...new Set(ids)];
     const removed = await db.transaction('rw', db.ownedEchoes, async () => {
-      const found = (await db.ownedEchoes.bulkGet(wanted)).filter((row): row is OwnedEcho => row !== undefined);
+      const found = (await db.ownedEchoes.bulkGet(wanted)).filter(
+        (row): row is OwnedEcho => row !== undefined && !row.locked,
+      );
       await db.ownedEchoes.bulkDelete(found.map((row) => row.id));
       return found;
     });
     const gone = new Set(removed.map((row) => row.id));
     set((s) => ({ echoes: s.echoes.filter((e) => !gone.has(e.id)) }));
     return removed;
+  },
+
+  setLocked: async (ids, locked) => {
+    const wanted = [...new Set(ids)];
+    const changed = await db.transaction('rw', db.ownedEchoes, async () => {
+      const rows = (await db.ownedEchoes.bulkGet(wanted))
+        .filter((row): row is OwnedEcho => row !== undefined && (row.locked === true) !== locked)
+        .map((row) => withLock(row, locked));
+      await db.ownedEchoes.bulkPut(rows);
+      return rows;
+    });
+    const byId = new Map(changed.map((row) => [row.id, row]));
+    set((s) => ({ echoes: s.echoes.map((e) => byId.get(e.id) ?? e) }));
+    return changed;
   },
 
   restoreEchoes: async (rows) => {

@@ -382,12 +382,21 @@ interface Team {
     and `pruneDominated` drops it for every such build (`topN: 1`,
     `costBudget: 12`) in both the whole inventory and the
     equipped-elsewhere-excluded pool (`selectCandidates`).
+  - **Locked**: `OwnedEcho.locked?: true` protects an Echo, like the
+    in-game lock. It is unindexed: no Dexie bump, backup v1 unchanged.
+    - A locked Echo is never fodder (verdict `unused`, reason `locked`).
+      It stays in the pruning pool, so it never changes another Echo's
+      verdict.
+    - `removeEcho` refuses it, `removeEchoes` skips it, and the UI disables
+      Delete until it's unlocked.
+    - Lock doesn't filter the optimizer and never appears in share links.
   - That covers the top-1 result at minimum level 0, for the saved
     objectives only. A build that can't be checked against the current
     snapshot blocks all fodder.
 - **Delete undo.** Every Echo delete, single or bulk, shows an Undo toast
   (10 s, paused while hovered or focused). `useInventoryStore.removeEchoes`
-  and `restoreEchoes` each run in one Dexie transaction.
+  and `restoreEchoes` each run in one Dexie transaction. `removeEchoes`
+  skips locked Echoes.
   - `restoreEchoes` takes only `removeEchoes` output. It writes those rows
     back verbatim under the same ids, with no schema parse (`load()` never
     validates rows), and never overwrites an id that exists again.

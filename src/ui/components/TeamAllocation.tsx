@@ -17,6 +17,7 @@ import { useRosterStore } from '../../state/roster.ts';
 import { useSnapshotStore } from '../../state/snapshotStore.ts';
 import { echoDisplayName } from '../echoDisplay.ts';
 import { btnGhost, btnOutline, btnPrimary, labelClass, selectClass } from './classes.ts';
+import { MarkEquipped, type MarkedEquipped } from './MarkEquipped.tsx';
 import { Alert } from './ui.tsx';
 
 type Status =
@@ -38,16 +39,19 @@ const num = (n: number): string => Math.round(n).toLocaleString();
  * Team-wide Echo allocation for one saved team: each member in priority
  * order gets the best build from what higher-priority members left. Greedy,
  * not a joint optimum (said in the UI). Nothing is written until "Save as
- * builds"; equipping is out of scope.
+ * builds" or "Mark as equipped" (a record of a re-gear done in the game).
  */
 export function TeamAllocation({
   team,
   onSaved,
+  onMarked,
   run,
 }: {
   team: Team;
   /** Called with the rows just saved (the page offers Undo). */
   onSaved: (builds: Build[]) => void;
+  /** Called after "Mark as equipped" wrote the Echo records (the page offers Undo). */
+  onMarked?: (marked: MarkedEquipped) => void;
   /** Test seam; defaults to `runOptimization` workers like the Calculator. */
   run?: RunFn;
 }) {
@@ -197,8 +201,8 @@ export function TeamAllocation({
       <Alert tone="info" role="status">
         <strong>Greedy, not optimal for the whole team.</strong> Characters pick in the order below: each gets the best
         build from the Echoes the characters above left. Each step is exact, but a different order can give a better
-        total, so try reordering. Echoes equipped to anyone are fair game; nothing is equipped or changed until you
-        save builds.
+        total, so try reordering. Echoes equipped to anyone are fair game; nothing is saved or changed until you
+        save builds or mark them as equipped.
       </Alert>
 
       <ol className="space-y-2" aria-label="Priority order">
@@ -363,6 +367,13 @@ export function TeamAllocation({
           >
             {preview.savedIds !== null ? 'Saved' : `Save as ${drafts.length} ${drafts.length === 1 ? 'build' : 'builds'}`}
           </button>
+          <MarkEquipped
+            allocation={preview.allocation}
+            echoes={echoes}
+            stale={stale}
+            characterName={characterName}
+            onMarked={onMarked}
+          />
         </div>
       )}
     </div>

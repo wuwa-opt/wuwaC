@@ -11,6 +11,7 @@ import { useInventoryStore } from '../../state/inventory.ts';
 import { useLibraryStore } from '../../state/library.ts';
 import { useRosterStore } from '../../state/roster.ts';
 import { useSnapshotStore } from '../../state/snapshotStore.ts';
+import type { MarkedEquipped } from './MarkEquipped.tsx';
 import { TeamAllocation } from './TeamAllocation.tsx';
 
 const team: Team = { id: 't1', name: 'Main', characterIds: ['jiyan', 'verina', 'yangyang'] };
@@ -71,8 +72,10 @@ beforeEach(async () => {
   useCalculatorStore.setState({ enemyKind: 'mob', enemyLevel: 90, enemyBaseRES: 0.1 });
 });
 
-function renderAllocation(over: { run?: RunFn; onSaved?: (rows: Build[]) => void } = {}) {
-  return render(<TeamAllocation team={team} run={over.run ?? inlineRun} onSaved={over.onSaved ?? (() => undefined)} />);
+function renderAllocation(over: { run?: RunFn; onSaved?: (rows: Build[]) => void; onMarked?: (marked: MarkedEquipped) => void } = {}) {
+  return render(
+    <TeamAllocation team={team} run={over.run ?? inlineRun} onSaved={over.onSaved ?? (() => undefined)} onMarked={over.onMarked} />,
+  );
 }
 
 describe('TeamAllocation', () => {
@@ -80,7 +83,7 @@ describe('TeamAllocation', () => {
     renderAllocation();
     expect(screen.getByText(/greedy, not optimal for the whole team/i)).toBeInTheDocument();
     expect(screen.getByText(/different order can give a better total/i)).toBeInTheDocument();
-    expect(screen.getByText(/nothing is equipped or changed until you save builds/i)).toBeInTheDocument();
+    expect(screen.getByText(/nothing is saved or changed until you save builds or mark them as equipped/i)).toBeInTheDocument();
     expect(
       screen.getByText(/mob, Lv 90, 10% base RES, from the Calculator's current settings.*reset to the defaults/i),
     ).toBeInTheDocument();
@@ -303,5 +306,127 @@ describe('TeamAllocation', () => {
     expect(select).toHaveValue('b-jiyan-2'); // newest by default
     await user.selectOptions(select, 'b-jiyan');
     expect(select).toHaveValue('b-jiyan');
+  });
+
+  describe('Mark as equipped', () => {
+    /** x6 is worn by an outside character and x16 (weakest) is a sixth Echo marked on jiyan. */
+    const gear = (): OwnedEcho[] => [
+      ...inventory().map((e) => (e.id === 'x6' ? { ...e, equippedTo: 'calcharo' } : e)),
+      echo(16, { equippedTo: 'jiyan', substats: [{ stat: 'atk' as StatKey, value: 1 }] }),
+    ];
+    const worn = (id: string): string | null => useInventoryStore.getState().echoes.find((e) => e.id === id)!.equippedTo;
+
+    async function preview(user: ReturnType<typeof userEvent.setup>) {
+      useInventoryStore.setState({ echoes: gear(), loaded: true });
+      await db.ownedEchoes.bulkAdd(gear());
+      const onMarked = vi.fn();
+      renderAllocation({ onMarked });
+      await user.click(screen.getByRole('button', { name: 'Allocate Echoes' }));
+      await screen.findByRole('region', { name: 'Allocation preview' });
+      return onMarked;
+    }
+
+    it('says it only records, and confirms exactly what changes, with Cancel focused', async () => {
+      const user = userEvent.setup();
+      await preview(user);
+      expect(screen.getByText(/updates WuWaOpt.s record only\. Equip these in the game too/i)).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Mark as equipped' }));
+
+      const confirm = screen.getByRole('group', { name: 'Confirm mark as equipped' });
+      expect(within(confirm).getByText('15 Echoes assigned: Jiyan ×5, Verina ×5, Yangyang ×5.')).toBeInTheDocument();
+      expect(within(confirm).getByText('6 Echoes taken from other characters: Calcharo ×1, Jiyan ×5.')).toBeInTheDocument();
+      expect(within(confirm).getByText('1 Echo unequipped, back to the bag.')).toBeInTheDocument();
+      expect(within(confirm).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+      expect(within(confirm).getByRole('button', { name: 'Mark 16 Echoes' })).toBeEnabled();
+      expect(worn('x1')).toBe('jiyan'); // nothing written yet
+    });
+
+    it('Cancel writes nothing', async () => {
+      const user = userEvent.setup();
+      const onMarked = await preview(user);
+      await user.click(screen.getByRole('button', { name: 'Mark as equipped' }));
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByRole('group', { name: 'Confirm mark as equipped' })).not.toBeInTheDocument();
+      expect(onMarked).not.toHaveBeenCalled();
+      expect(worn('x11')).toBeNull();
+    });
+
+    it('records the allocation, hands the previous values to onMarked, and the preview goes stale', async () => {
+      const user = userEvent.setup();
+      const onMarked = await preview(user);
+      await user.click(screen.getByRole('button', { name: 'Mark as equipped' }));
+      await user.click(screen.getByRole('button', { name: 'Mark 16 Echoes' }));
+
+      await waitFor(() => expect(onMarked).toHaveBeenCalledTimes(1));
+      const { previous, applied } = onMarked.mock.calls[0][0] as {
+        previous: { id: string; equippedTo: string | null }[];
+        applied: { id: string; equippedTo: string | null }[];
+      };
+      expect(previous).toHaveLength(16);
+      expect(previous.find((p) => p.id === 'x6')).toEqual({ id: 'x6', equippedTo: 'calcharo' });
+      expect(applied.find((a) => a.id === 'x16')).toEqual({ id: 'x16', equippedTo: null });
+      for (const n of [11, 12, 13, 14, 15]) expect(worn(`x${n}`)).toBe('jiyan');
+      for (const n of [6, 7, 8, 9, 10]) expect(worn(`x${n}`)).toBe('verina');
+      for (const n of [1, 2, 3, 4, 5]) expect(worn(`x${n}`)).toBe('yangyang');
+      expect(worn('x16')).toBeNull();
+      expect((await db.ownedEchoes.get('x16'))?.equippedTo).toBeNull();
+
+      expect(await screen.findByText(/your inputs changed since this preview/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Mark as equipped' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Save as 3 builds' })).toBeDisabled();
+      expect(screen.getByText(/already recorded as equipped this way\. Run again to compare against the new gear/i)).toBeInTheDocument();
+    });
+
+    it('is disabled for a stale preview', async () => {
+      const user = userEvent.setup();
+      await preview(user);
+      expect(screen.getByRole('button', { name: 'Mark as equipped' })).toBeEnabled();
+      act(() => useInventoryStore.setState((s) => ({ echoes: s.echoes.filter((e) => e.id !== 'x15') })));
+      expect(await screen.findByText(/your inputs changed since this preview/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Mark as equipped' })).toBeDisabled();
+    });
+
+    it('closes an open confirm when the records change under it, and writes nothing', async () => {
+      const user = userEvent.setup();
+      const onMarked = await preview(user);
+      await user.click(screen.getByRole('button', { name: 'Mark as equipped' }));
+      expect(screen.getByRole('group', { name: 'Confirm mark as equipped' })).toBeInTheDocument();
+
+      act(() =>
+        useInventoryStore.setState((s) => ({ echoes: s.echoes.map((e) => (e.id === 'x16' ? { ...e, equippedTo: 'verina' } : e)) })),
+      );
+
+      expect(screen.queryByRole('group', { name: 'Confirm mark as equipped' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Mark as equipped' })).toBeDisabled();
+      expect(onMarked).not.toHaveBeenCalled();
+      expect(worn('x11')).toBeNull();
+    });
+
+    it('re-running after marking compares against the gear just marked (stubbed run)', async () => {
+      const user = userEvent.setup();
+      const calls: number[] = [];
+      const run: RunFn = (data, request) => {
+        calls.push(data.echoes.length);
+        return inlineRun(data, request);
+      };
+      useInventoryStore.setState({ echoes: gear(), loaded: true });
+      await db.ownedEchoes.bulkAdd(gear());
+      renderAllocation({ run });
+      await user.click(screen.getByRole('button', { name: 'Allocate Echoes' }));
+      await screen.findByRole('region', { name: 'Allocation preview' });
+      await user.click(screen.getByRole('button', { name: 'Mark as equipped' }));
+      await user.click(screen.getByRole('button', { name: 'Mark 16 Echoes' }));
+      expect(await screen.findByText(/your inputs changed since this preview/i)).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Allocate Echoes' }));
+
+      const rerun = await screen.findByRole('region', { name: 'Allocation preview' });
+      const rows = within(rerun).getAllByRole('listitem');
+      for (const row of rows) expect(row).toHaveTextContent('+0.0% vs your equipped Echoes, best slot-1 order');
+      expect(within(rerun).queryByText(/No comparison/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/your inputs changed since this preview/i)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Mark as equipped' })).toBeDisabled(); // nothing left to record
+    });
   });
 });

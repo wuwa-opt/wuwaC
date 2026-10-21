@@ -339,3 +339,102 @@ describe('inventory store: locks', () => {
     expect((await db.ownedEchoes.get(a.id))?.locked).toBe(true);
   });
 });
+
+describe('inventory store: equipped reassignment', () => {
+  const seed = async () => {
+    const rows = [];
+    for (const [i, who] of ([['jiyan'], ['jiyan'], ['verina'], [null]] as const).entries()) {
+      rows.push(await useInventoryStore.getState().addEcho({ ...draft, label: `E${i}`, equippedTo: who[0] }));
+    }
+    return rows;
+  };
+  const worn = async (): Promise<(string | null)[]> =>
+    (await db.ownedEchoes.toArray()).sort((a, b) => (a.label ?? '').localeCompare(b.label ?? '')).map((e) => e.equippedTo);
+
+  it('reassignEquipped returns the previous values of changed rows only, in Dexie and state', async () => {
+    const [a, b, c, d] = await seed();
+    const previous = await useInventoryStore.getState().reassignEquipped([
+      { id: a.id, equippedTo: null },
+      { id: b.id, equippedTo: 'jiyan' }, // already there
+      { id: c.id, equippedTo: 'yangyang' },
+      { id: d.id, equippedTo: 'jiyan' },
+      { id: 'missing', equippedTo: 'jiyan' },
+    ]);
+    expect(previous).toEqual([
+      { id: a.id, equippedTo: 'jiyan' },
+      { id: c.id, equippedTo: 'verina' },
+      { id: d.id, equippedTo: null },
+    ]);
+    expect(await worn()).toEqual([null, 'jiyan', 'yangyang', 'jiyan']);
+    expect(useInventoryStore.getState().echoes.map((e) => e.equippedTo)).toEqual([null, 'jiyan', 'yangyang', 'jiyan']);
+  });
+
+  it('writes through locks and keeps every other field', async () => {
+    const [a] = await seed();
+    await useInventoryStore.getState().setLocked([a.id], true);
+    await useInventoryStore.getState().reassignEquipped([{ id: a.id, equippedTo: 'verina' }]);
+    expect(await db.ownedEchoes.get(a.id)).toEqual({ ...a, locked: true, equippedTo: 'verina' });
+  });
+
+  it('a failing reassignEquipped transaction rolls back and leaves state and Dexie untouched', async () => {
+    const rows = await seed();
+    const original = db.ownedEchoes.bulkPut.bind(db.ownedEchoes);
+    vi.spyOn(db.ownedEchoes, 'bulkPut').mockImplementation((async (items: unknown[]) => {
+      await original([items[0]] as never); // partially applied inside the transaction...
+      throw new Error('disk full');
+    }) as never);
+
+    await expect(
+      useInventoryStore.getState().reassignEquipped(rows.map((r) => ({ id: r.id, equippedTo: 'calcharo' }))),
+    ).rejects.toThrow('disk full');
+
+    expect(await worn()).toEqual(['jiyan', 'jiyan', 'verina', null]); // ...and rolled back
+    expect(useInventoryStore.getState().echoes).toEqual(rows);
+  });
+
+  it('restoreEquipped puts the previous values back', async () => {
+    const rows = await seed();
+    const applied = rows.map((r) => ({ id: r.id, equippedTo: 'calcharo' as string | null }));
+    const previous = await useInventoryStore.getState().reassignEquipped(applied);
+    expect(await worn()).toEqual(['calcharo', 'calcharo', 'calcharo', 'calcharo']);
+
+    const { restored, skipped } = await useInventoryStore.getState().restoreEquipped(previous, applied);
+
+    expect(restored.sort()).toEqual(rows.map((r) => r.id).sort());
+    expect(skipped).toEqual([]);
+    expect(await worn()).toEqual(['jiyan', 'jiyan', 'verina', null]);
+    expect(useInventoryStore.getState().echoes).toEqual(rows);
+  });
+
+  it('restoreEquipped skips rows changed or deleted since, and reports them', async () => {
+    const [a, b, c, d] = await seed();
+    const applied = [a, b, c, d].map((r) => ({ id: r.id, equippedTo: 'calcharo' as string | null }));
+    const previous = await useInventoryStore.getState().reassignEquipped(applied);
+    await useInventoryStore.getState().reassignEquipped([{ id: b.id, equippedTo: 'yangyang' }]); // moved on
+    await useInventoryStore.getState().removeEchoes([c.id]); // gone
+
+    const { restored, skipped } = await useInventoryStore.getState().restoreEquipped(previous, applied);
+
+    expect(restored.sort()).toEqual([a.id, d.id].sort());
+    expect(skipped.sort()).toEqual([b.id, c.id].sort());
+    expect(await db.ownedEchoes.get(a.id)).toMatchObject({ equippedTo: 'jiyan' });
+    expect(await db.ownedEchoes.get(b.id)).toMatchObject({ equippedTo: 'yangyang' });
+    expect(useInventoryStore.getState().echoes.find((e) => e.id === b.id)?.equippedTo).toBe('yangyang');
+  });
+
+  it('a failing restoreEquipped transaction rolls back', async () => {
+    const rows = await seed();
+    const applied = rows.map((r) => ({ id: r.id, equippedTo: 'calcharo' as string | null }));
+    const previous = await useInventoryStore.getState().reassignEquipped(applied);
+    const original = db.ownedEchoes.bulkPut.bind(db.ownedEchoes);
+    vi.spyOn(db.ownedEchoes, 'bulkPut').mockImplementation((async (items: unknown[]) => {
+      await original([items[0]] as never);
+      throw new Error('quota exceeded');
+    }) as never);
+
+    await expect(useInventoryStore.getState().restoreEquipped(previous, applied)).rejects.toThrow('quota exceeded');
+
+    expect(await worn()).toEqual(['calcharo', 'calcharo', 'calcharo', 'calcharo']);
+    expect(useInventoryStore.getState().echoes.every((e) => e.equippedTo === 'calcharo')).toBe(true);
+  });
+});

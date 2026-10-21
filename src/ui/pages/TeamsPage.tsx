@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { TEAM_BUFFS } from '../../data/teamBuffs.ts';
 import { teamSonataCoverage } from '../../domain/teams.ts';
 import { useInventoryStore } from '../../state/inventory.ts';
@@ -11,6 +11,7 @@ import { btnDangerGhost, btnPrimary, inputClass, labelClass } from '../component
 import { Skeleton, ToastStack } from '../components/feedback.tsx';
 import { UNDO_TOAST_MS, useToasts } from '../toasts.ts';
 import { Collapsible } from '../components/Collapsible.tsx';
+import type { MarkedEquipped } from '../components/MarkEquipped.tsx';
 import { TeamAllocation } from '../components/TeamAllocation.tsx';
 import { SuggestInput } from '../components/SuggestInput.tsx';
 import { Alert, AttributeDot, EmptyState, PageHeader, Window } from '../components/ui.tsx';
@@ -25,6 +26,8 @@ export function TeamsPage() {
   const echoes = useInventoryStore((s) => s.echoes);
   const inventoryLoaded = useInventoryStore((s) => s.loaded);
   const loadInventory = useInventoryStore((s) => s.load);
+  const restoreEquipped = useInventoryStore((s) => s.restoreEquipped);
+  const generation = useInventoryStore((s) => s.generation);
   const snapshot = useSnapshotStore((s) => s.snapshot);
   const ensureSnapshotLoaded = useSnapshotStore((s) => s.ensureLoaded);
 
@@ -33,9 +36,17 @@ export function TeamsPage() {
   const [error, setError] = useState<string | null>(null);
   const { toasts, push: pushToast, dismiss: dismissToast, hold: holdToast } = useToasts();
 
+  // Undo toasts for "Mark as equipped" (in memory only; a reload invalidates them).
+  const equipUndoToasts = useRef(new Set<number>());
+
   useEffect(() => {
     if (!loaded) void load();
   }, [loaded, load]);
+  useEffect(() => {
+    for (const id of equipUndoToasts.current) dismissToast(id);
+    equipUndoToasts.current.clear();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire on generation change only
+  }, [generation]);
   useEffect(() => {
     if (!inventoryLoaded) void loadInventory();
   }, [inventoryLoaded, loadInventory]);
@@ -63,6 +74,37 @@ export function TeamsPage() {
         },
       },
     });
+  };
+
+  /** Toast with an Undo that puts back the `equippedTo` values just replaced (in memory only). */
+  const offerUndoMark = ({ previous, applied }: MarkedEquipped): void => {
+    const issuedAt = useInventoryStore.getState().generation;
+    const noun = (n: number): string => `${n} ${n === 1 ? 'Echo' : 'Echoes'}`;
+    const toastId = pushToast(
+      `Marked ${noun(previous.length)} as equipped in WuWaOpt's record. Equip them in the game too.`,
+      'success',
+      {
+        timeoutMs: UNDO_TOAST_MS,
+        action: {
+          label: 'Undo',
+          onAction: () => {
+            dismissToast(toastId);
+            equipUndoToasts.current.delete(toastId);
+            if (useInventoryStore.getState().generation !== issuedAt) return;
+            restoreEquipped(previous, applied)
+              .then(({ restored, skipped }) =>
+                pushToast(
+                  skipped.length === 0
+                    ? `Restored the record for ${noun(restored.length)}.`
+                    : `Restored the record for ${noun(restored.length)}; ${noun(skipped.length)} changed since, left as is.`,
+                ),
+              )
+              .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Undo failed.'));
+          },
+        },
+      },
+    );
+    equipUndoToasts.current.add(toastId);
   };
 
   const handleCreate = async (): Promise<void> => {
@@ -218,6 +260,7 @@ export function TeamsPage() {
                         key={`${team.id}:${team.characterIds.join(',')}`}
                         team={team}
                         onSaved={(rows) => offerUndoSave(team.name, rows)}
+                        onMarked={offerUndoMark}
                       />
                     </Collapsible>
                   </div>

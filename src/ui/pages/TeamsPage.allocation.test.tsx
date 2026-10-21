@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Build, OwnedEcho, RosterEntry, Team } from '../../data/schema.ts';
 import { db } from '../../state/db.ts';
@@ -92,5 +92,68 @@ describe('TeamsPage allocation', () => {
     const left = await db.builds.toArray();
     expect(left.map((b) => b.id).sort()).toEqual(['b-jiyan', 'b-verina', 'b-yangyang']);
     expect(useLibraryStore.getState().builds).toHaveLength(3);
+  });
+
+  it('marks the allocation as equipped, and Undo puts the previous record back', async () => {
+    // x1..x5 start on jiyan; the allocation hands them to yangyang.
+    await db.ownedEchoes.bulkPut([1, 2, 3, 4, 5].map((i) => ({ ...echo(i), equippedTo: 'jiyan' })));
+    const user = userEvent.setup();
+    render(<TeamsPage />);
+    await user.click(await screen.findByRole('button', { name: /allocate echoes across this team/i }));
+    const run = screen.getByRole('button', { name: 'Allocate Echoes' });
+    await waitFor(() => expect(run).toBeEnabled());
+    await user.click(run);
+    await user.click(await screen.findByRole('button', { name: 'Mark as equipped' }));
+    await user.click(screen.getByRole('button', { name: 'Mark 15 Echoes' }));
+
+    expect(await screen.findByText(/Marked 15 Echoes as equipped in WuWaOpt's record\. Equip them in the game too\./)).toBeInTheDocument();
+    const wornNow = async () => Object.fromEntries((await db.ownedEchoes.toArray()).map((e) => [e.id, e.equippedTo]));
+    expect(await wornNow()).toMatchObject({ x1: 'yangyang', x6: 'verina', x11: 'jiyan', x15: 'jiyan' });
+    expect(useInventoryStore.getState().echoes.find((e) => e.id === 'x11')?.equippedTo).toBe('jiyan');
+    expect(await db.builds.count()).toBe(3); // marking saves no builds
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+
+    expect(await screen.findByText('Restored the record for 15 Echoes.')).toBeInTheDocument();
+    const restored = await wornNow();
+    for (let i = 1; i <= 5; i += 1) expect(restored[`x${i}`]).toBe('jiyan');
+    for (let i = 6; i <= 15; i += 1) expect(restored[`x${i}`]).toBeNull();
+    expect(useInventoryStore.getState().echoes.filter((e) => e.equippedTo === 'jiyan')).toHaveLength(5);
+  });
+
+  it('Undo skips an Echo that was moved after marking', async () => {
+    const user = userEvent.setup();
+    render(<TeamsPage />);
+    await user.click(await screen.findByRole('button', { name: /allocate echoes across this team/i }));
+    const run = screen.getByRole('button', { name: 'Allocate Echoes' });
+    await waitFor(() => expect(run).toBeEnabled());
+    await user.click(run);
+    await user.click(await screen.findByRole('button', { name: 'Mark as equipped' }));
+    await user.click(screen.getByRole('button', { name: 'Mark 15 Echoes' }));
+    await screen.findByText(/^Marked 15 Echoes/);
+    await useInventoryStore.getState().reassignEquipped([{ id: 'x11', equippedTo: 'calcharo' }]);
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+
+    expect(await screen.findByText('Restored the record for 14 Echoes; 1 Echo changed since, left as is.')).toBeInTheDocument();
+    expect((await db.ownedEchoes.get('x11'))?.equippedTo).toBe('calcharo');
+    expect((await db.ownedEchoes.get('x12'))?.equippedTo).toBeNull();
+  });
+
+  it('drops the pending Undo when the inventory is reloaded', async () => {
+    const user = userEvent.setup();
+    render(<TeamsPage />);
+    await user.click(await screen.findByRole('button', { name: /allocate echoes across this team/i }));
+    const run = screen.getByRole('button', { name: 'Allocate Echoes' });
+    await waitFor(() => expect(run).toBeEnabled());
+    await user.click(run);
+    await user.click(await screen.findByRole('button', { name: 'Mark as equipped' }));
+    await user.click(screen.getByRole('button', { name: 'Mark 15 Echoes' }));
+    await screen.findByText(/^Marked 15 Echoes/);
+
+    await act(async () => useInventoryStore.getState().load()); // e.g. a backup restore
+
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Marked 15 Echoes/)).not.toBeInTheDocument();
   });
 });

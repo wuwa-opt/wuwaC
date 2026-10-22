@@ -1,5 +1,5 @@
 import type { OwnedEcho } from '../data/schema.ts';
-import { markKnown, toDraft, type ScanDraft } from './draft.ts';
+import { echoFingerprint, markKnown, toDraft, type ScanDraft } from './draft.ts';
 import type { PanelParse, ScanBatch } from './parse.ts';
 
 /**
@@ -36,6 +36,13 @@ export interface ReviewRow {
   state: RowState;
   /** The inventory already holds an identical Echo (multiset match). */
   known: boolean;
+  /**
+   * Index of an earlier row in this scan with identical rolls, or null.
+   * In a video that is almost always the same Echo clicked twice (A -> B
+   * -> A); two truly identical tuned Echoes are rare, so a repeat starts
+   * unticked and the user can tick it.
+   */
+  repeatOf: number | null;
   included: boolean;
 }
 
@@ -54,14 +61,22 @@ function rowState(item: ScanItem, draft: ScanDraft | null): RowState {
 export function reviewRows(items: readonly ScanItem[], owned: readonly OwnedEcho[]): ReviewRow[] {
   const drafts = items.map(rowDraft);
   const known = markKnown(drafts, owned);
+  const firstSeen = new Map<string, number>();
   return items.map((item, i) => {
     const draft = drafts[i];
+    let repeatOf: number | null = null;
+    if (draft !== null) {
+      const fp = echoFingerprint(draft);
+      repeatOf = firstSeen.get(fp) ?? null;
+      if (repeatOf === null) firstSeen.set(fp, i);
+    }
     return {
       item,
       draft,
       state: rowState(item, draft),
       known: known[i],
-      included: draft !== null && (item.include ?? !known[i]),
+      repeatOf,
+      included: draft !== null && (item.include ?? (!known[i] && repeatOf === null)),
     };
   });
 }
@@ -74,6 +89,7 @@ export interface ScanSummary {
   fix: number;
   failed: number;
   known: number;
+  repeats: number;
   included: number;
 }
 
@@ -87,6 +103,7 @@ export function summarize(rows: readonly ReviewRow[]): ScanSummary {
     fix: count('fix'),
     failed: count('failed'),
     known: rows.filter((r) => r.known).length,
+    repeats: rows.filter((r) => r.repeatOf !== null).length,
     included: rows.filter((r) => r.included).length,
   };
 }

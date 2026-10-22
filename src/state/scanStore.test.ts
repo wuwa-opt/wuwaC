@@ -1,25 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { OwnedEcho } from '../data/schema.ts';
 import fixtures from '../scanner/fixtures/panels.json';
-import type { OcrWord } from '../scanner/parse.ts';
+import type { FrameRead } from '../scanner/engine.ts';
+import type { ParseFn } from '../scanner/pipeline.ts';
 import { reviewRows, summarize } from '../scanner/review.ts';
 import { screenshotProblem } from '../scanner/imageLimits.ts';
 import { pngBytes } from '../scanner/testImages.ts';
-import { setScanDeps, useScanStore } from './scanStore.ts';
+import { isPanelless, setScanDeps, useScanStore } from './scanStore.ts';
+import type { VideoScanOptions } from '../scanner/videoFrames.ts';
 
 type RawPanel = { frame: number[]; words: (string | number)[][] };
 const PANELS = fixtures.panels as Record<string, RawPanel>;
 
 /** Fake engine: replays the real OCR words recorded for the fixture with the file's name. */
-function fakeReader(image: Blob): Promise<{ words: OcrWord[]; width: number; height: number }> {
+function fakeReader(image: Blob, parse: ParseFn): Promise<FrameRead> {
   const name = (image as File).name;
+  // "blank" stands for a frame with no Echo panel (e.g. the desktop): no words.
+  if (name === 'blank') return Promise.resolve({ words: [], parse: parse([]), width: 1920, height: 1080 });
   const panel = PANELS[name];
   if (panel === undefined) return Promise.reject(new Error(`unreadable image ${name}`));
   const words = panel.words.map(([text, x0, y0, x1, y1]) => ({
     text: String(text),
     bbox: { x0: Number(x0), y0: Number(y0), x1: Number(x1), y1: Number(y1) },
   }));
-  return Promise.resolve({ words, width: panel.frame[0], height: panel.frame[1] });
+  return Promise.resolve({ words, parse: parse(words), width: panel.frame[0], height: panel.frame[1] });
 }
 
 const file = (name: string): File => new File([], name, { type: 'image/png' });
@@ -98,9 +102,9 @@ describe('screenshot limits in the scan store', () => {
     const reads: string[] = [];
     setScanDeps({
       validate: screenshotProblem,
-      createReader: () => Promise.resolve((image) => {
+      createReader: () => Promise.resolve((image, parse) => {
         reads.push((image as File).name);
-        return fakeReader(image);
+        return fakeReader(image, parse);
       }),
       thumbnail: () => Promise.resolve(null),
     });
@@ -132,30 +136,33 @@ describe('screenshot limits in the scan store', () => {
 });
 
 describe('reviewRows', () => {
-  it('classifies rows and skips Echoes the inventory already owns by default', async () => {
+  it('classifies rows; owned Echoes and in-scan repeats start unticked', async () => {
     const store = useScanStore.getState();
     store.setBatch({ sonataId: 'flamewing-s-shadow' });
-    await store.addImages([file('2026-10-16_16-56-49'), file('2026-10-16_16-56-49')]);
+    await store.addImages([file('2026-10-16_16-56-49'), file('2026-10-16_17-18-02'), file('2026-10-16_16-56-49')]);
     const items = useScanStore.getState().items;
     const rows = reviewRows(items, []);
-    expect(rows.map((r) => [r.state, r.known, r.included])).toEqual([
-      ['ready', false, true],
-      ['ready', false, true],
+    // The third row has the first one's exact rolls: a repeat (e.g. clicked twice in a video).
+    expect(rows.map((r) => [r.state, r.known, r.repeatOf, r.included])).toEqual([
+      ['ready', false, null, true],
+      ['ready', false, null, true],
+      ['ready', false, 0, false],
     ]);
 
-    // Own one identical copy: the first scanned copy is known, the second is new.
-    const draft = rows[0].draft!;
-    const owned: OwnedEcho = { ...draft, id: 'owned-1', origin: 'manual' };
+    // Own one identical copy: the first scanned copy is known; the repeat stays a repeat.
+    const owned: OwnedEcho = { ...rows[0].draft!, id: 'owned-1', origin: 'manual' };
     const withOwned = reviewRows(items, [owned]);
-    expect(withOwned.map((r) => [r.known, r.included])).toEqual([
-      [true, false],
-      [false, true],
+    expect(withOwned.map((r) => [r.known, r.repeatOf, r.included])).toEqual([
+      [true, null, false],
+      [false, null, true],
+      [false, 0, false],
     ]);
-    // An explicit include overrides the default.
-    useScanStore.getState().setInclude(items[0].id, true);
-    expect(reviewRows(useScanStore.getState().items, [owned])[0].included).toBe(true);
+    expect(summarize(withOwned)).toEqual({ total: 3, reading: 0, ready: 3, review: 0, fix: 0, failed: 0, known: 1, repeats: 1, included: 1 });
 
-    expect(summarize(withOwned)).toEqual({ total: 2, reading: 0, ready: 2, review: 0, fix: 0, failed: 0, known: 1, included: 1 });
+    // An explicit tick overrides either default (e.g. two truly identical Echoes).
+    useScanStore.getState().setInclude(items[0].id, true);
+    useScanStore.getState().setInclude(items[2].id, true);
+    expect(reviewRows(useScanStore.getState().items, [owned]).map((r) => r.included)).toEqual([true, true, true]);
   });
 
   it('marks error rows as fix and never includes them until overridden', async () => {
@@ -169,5 +176,92 @@ describe('reviewRows', () => {
     const fixed = { ...reviewRows([{ ...item, batch: { sonataId: 'flamewing-s-shadow', rarity: 5 }, parse: { ...item.parse!, flags: [] } }], [])[0].draft! };
     useScanStore.getState().setOverride(item.id, { ...fixed, sonataId: 'flamewing-s-shadow' });
     expect(reviewRows(useScanStore.getState().items, [])[0]).toMatchObject({ state: 'ready', included: true });
+  });
+});
+
+describe('video scans', () => {
+  /** Fake walker: emits the named fixture frames in order, reporting progress per frame. */
+  function walker(names: string[], opts: { failAfter?: number } = {}) {
+    return (_video: File, options: VideoScanOptions) => {
+      for (const [i, name] of names.entries()) {
+        options.signal?.throwIfAborted();
+        if (opts.failAfter === i) return Promise.reject(new Error('decoder died'));
+        options.onFrame(file(name), { start: i, end: i, pick: i });
+        options.onProgress?.(i + 1, names.length);
+      }
+      return Promise.resolve({ duration: names.length, segments: names.length });
+    };
+  }
+
+  it('reads each found panel, drops panel-less frames, and keeps revisits as repeats', async () => {
+    // The 2026-10-22 recording: a desktop frame first, two Fleurdelys, then a Spectro Drake revisit.
+    setScanDeps({
+      createReader: () => Promise.resolve(fakeReader),
+      thumbnail: () => Promise.resolve(null),
+      scanVideo: walker(['blank', 'vid-seg01', 'vid-seg02', 'vid-seg10', 'vid-seg11', 'vid-seg12']),
+    });
+    const store = useScanStore.getState();
+    store.setBatch({ sonataId: 'windward-pilgrimage' });
+    await store.addVideo(file('clip.mp4'));
+
+    const state = useScanStore.getState();
+    expect(state.video).toBeNull();
+    expect(state.lastVideo).toEqual({ fileName: 'clip.mp4', found: 5, skipped: 1, cancelled: false, error: null });
+    expect(state.items.map((it) => it.parse?.echo.echoDefId)).toEqual([
+      'reminiscence-fleurdelys',
+      'reminiscence-fleurdelys',
+      'spectro-drake',
+      'fusion-drake',
+      'spectro-drake',
+    ]);
+    expect(reviewRows(state.items, []).map((r) => r.repeatOf)).toEqual([null, null, null, null, 2]);
+  });
+
+  it('cancels between frames and keeps what was already found', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    setScanDeps({
+      createReader: () => Promise.resolve(fakeReader),
+      thumbnail: () => Promise.resolve(null),
+      scanVideo: async (_video, options) => {
+        options.onFrame(file('vid-seg03'), { start: 0, end: 0, pick: 0 });
+        await gate;
+        options.signal?.throwIfAborted();
+        options.onFrame(file('vid-seg04'), { start: 1, end: 1, pick: 1 });
+        return { duration: 2, segments: 2 };
+      },
+    });
+    const store = useScanStore.getState();
+    store.setBatch({ sonataId: 'windward-pilgrimage' });
+    const running = store.addVideo(file('clip.mp4'));
+    expect(useScanStore.getState().video).toMatchObject({ fileName: 'clip.mp4', found: 1 });
+    await expect(useScanStore.getState().addVideo(file('other.mp4'))).rejects.toThrow(/already being scanned/);
+    useScanStore.getState().cancelVideo();
+    release();
+    await running;
+    expect(useScanStore.getState().lastVideo).toEqual({ fileName: 'clip.mp4', found: 1, skipped: 0, cancelled: true, error: null });
+    expect(useScanStore.getState().items).toHaveLength(1);
+  });
+
+  it('reports a recording that cannot be decoded, keeping frames read before the failure', async () => {
+    setScanDeps({
+      createReader: () => Promise.resolve(fakeReader),
+      thumbnail: () => Promise.resolve(null),
+      scanVideo: walker(['vid-seg05', 'vid-seg06'], { failAfter: 1 }),
+    });
+    const store = useScanStore.getState();
+    store.setBatch({ sonataId: 'windward-pilgrimage' });
+    await store.addVideo(file('broken.mkv'));
+    expect(useScanStore.getState().lastVideo).toEqual({ fileName: 'broken.mkv', found: 1, skipped: 0, cancelled: false, error: 'decoder died' });
+  });
+
+  it('needs the batch Sonata first, like screenshots', async () => {
+    await expect(useScanStore.getState().addVideo(file('clip.mp4'))).rejects.toThrow(/Sonata set/);
+  });
+
+  it('treats a parse with no name, cost or main stat as panel-less — and only that', () => {
+    const empty = { echoDefId: null, cost: null, level: null, rarity: 5, sonataId: 'x', mainStat: null, secondMainStat: null, substats: [], equippedTo: null };
+    expect(isPanelless({ echo: empty, flags: [] })).toBe(true);
+    expect(isPanelless({ echo: { ...empty, cost: 4 }, flags: [] })).toBe(false);
   });
 });

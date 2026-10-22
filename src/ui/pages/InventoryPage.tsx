@@ -316,10 +316,10 @@ export function InventoryPage() {
                 type="button"
                 onClick={() => setScanning(true)}
                 disabled={scanning}
-                title="Read Echoes from screenshots of the in-game Echo Management panel"
+                title="Read Echoes from screenshots or a screen recording of the in-game Echo Management panel"
                 className={btnOutline}
               >
-                Scan screenshots
+                Scan from game
               </button>
               <button
                 type="button"

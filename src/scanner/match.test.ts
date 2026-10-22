@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonical, levenshtein, matchVocab, normalizedDistance } from './match.ts';
+import { canonical, foldConfusables, levenshtein, matchVocab, normalizedDistance } from './match.ts';
 
 describe('canonical', () => {
   it('lowercases and turns punctuation runs into single spaces', () => {
@@ -55,5 +55,23 @@ describe('matchVocab', () => {
   it('rejects distant and empty reads', () => {
     expect(matchVocab('Healing', vocab)).toEqual({ kind: 'none' });
     expect(matchVocab('%%', vocab)).toEqual({ kind: 'none' });
+  });
+});
+
+describe('confusable glyphs', () => {
+  it('folds I/l/1 and O/0, the pairs this font draws alike', () => {
+    expect(foldConfusables('luno')).toBe('iuno');
+    expect(foldConfusables('10 1')).toBe('io i');
+  });
+
+  it('reads "luno" as Iuno exactly — the real 2026-10-22 misread', () => {
+    const chars = [{ text: 'Iuno', value: 'iuno' }, { text: 'Lupa', value: 'lupa' }];
+    expect(matchVocab('luno', chars)).toEqual({ kind: 'exact', value: 'iuno', text: 'Iuno' });
+  });
+
+  it('never resolves a fold that fits two entries', () => {
+    const v = [{ text: 'Ilo', value: 'a' }, { text: 'lIo', value: 'b' }];
+    // "110" folds to "iio", as do both entries: a tie, reported as ambiguous.
+    expect(matchVocab('110', v).kind).toBe('ambiguous');
   });
 });

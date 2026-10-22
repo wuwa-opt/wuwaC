@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadBundledSnapshot } from '../data/index.ts';
 import type { StatKey } from '../data/schema.ts';
 import fixtures from './fixtures/panels.json';
-import { groupRows, parsePanel, resolveCharacter, type OcrWord, type ScanBatch, type ScanField } from './parse.ts';
+import { groupRows, parsePanel, resolveCharacter, textLineBox, type OcrWord, type ScanBatch, type ScanField } from './parse.ts';
 
 const snapshot = loadBundledSnapshot();
 
@@ -157,7 +157,38 @@ describe('parsePanel (synthetic)', () => {
   it('offers a unique name prefix for review when art hides the end of the name', () => {
     const { echo, flags } = parsePanel(panelWords(['Nightmare: Dwarf', '+25', 'COST 1'], []), { sonataId: 'x', rarity: 5 }, snapshot);
     expect(echo.echoDefId).toBe('nightmare-dwarf-cassowary');
-    expect(flags[0]).toEqual({ field: 'name', severity: 'review', message: 'name read approximately as Nightmare: Dwarf Cassowary' });
+    expect(flags[0]).toMatchObject({ field: 'name', severity: 'review', message: 'name read approximately as Nightmare: Dwarf Cassowary', row: { lines: 1 } });
+  });
+});
+
+describe('parsePanel row reporting (for the retry pass)', () => {
+  it('errors on a stat label whose value was not read, instead of dropping the row', () => {
+    // Real case (2026-10-22 video, Kerasaur): "Energy Regen 9.2%" lost its value.
+    const words = panelWords(HEADER_KERASAUR, STATS_KERASAUR.slice(0, 6));
+    // Next row at the 45 px pitch: 460 + 6 * 45 = 730.
+    words.push(w('Energy', 1355, 730, 1440, 752), w('Regen', 1448, 730, 1520, 752));
+    const { echo, flags } = parsePanel(words, BATCH, snapshot);
+    expect(echo.substats).toHaveLength(5);
+    expect(echo.substats[4]).toBeNull();
+    expect(flags).toEqual([
+      { field: 'sub5', severity: 'error', message: 'Energy Regen value not read', row: { bbox: { x0: 1355, y0: 730, x1: 1520, y1: 752 }, lines: 1 } },
+    ]);
+  });
+
+  it('reports a wrapped label as a two-line row', () => {
+    const words = panelWords(HEADER_KERASAUR, STATS_KERASAUR.slice(0, 2));
+    words.push(w('Resonance', 1355, 550, 1480, 572), w('Skill', 1488, 550, 1550, 572), w('DMG', 1558, 550, 1610, 572));
+    words.push(w('7.0%', 1784, 550, 1848, 572), w('Bonus', 1355, 584, 1430, 606));
+    const { flags } = parsePanel(words, BATCH, snapshot);
+    expect(flags[0]).toMatchObject({ field: 'sub1', severity: 'error', row: { lines: 2, bbox: { y0: 550, y1: 606 } } });
+  });
+});
+
+describe('textLineBox', () => {
+  it('uses the top edge and the smallest wordy height, ignoring art-inflated boxes and junk', () => {
+    // Real boxes from the 2026-10-22 video (seg00 name row).
+    const row = groupRows([w('Reminiscence:', 1308, 109, 1548, 150), w('Fledrel=gis', 1559, 108, 1737, 172), w('\\', 1712, 120, 1728, 140)])[0];
+    expect(textLineBox(row)).toEqual({ x0: 1308, y0: 108, x1: 1737, y1: 149 });
   });
 });
 
@@ -170,6 +201,10 @@ describe('resolveCharacter', () => {
     const r = resolveCharacter('Rover', snapshot.characters);
     expect(r.kind).toBe('many');
     if (r.kind === 'many') expect(r.ids.slice().sort()).toEqual(['rover-aero', 'rover-electro', 'rover-havoc', 'rover-spectro']);
+  });
+
+  it('reads the font-confusable "luno" as Iuno (capital I vs lowercase l)', () => {
+    expect(resolveCharacter('luno', snapshot.characters)).toMatchObject({ kind: 'one', id: 'iuno', exact: true });
   });
 
   it('returns none for unknown text', () => {
@@ -233,7 +268,7 @@ function panel(name: string): Panel {
   return found[1];
 }
 
-describe('parsePanel on 17 real OCR reads (tesseract.js 7, 4-pass)', () => {
+describe('parsePanel on 33 real OCR reads (tesseract.js 7, 5-pass: 17 screenshots + 16 video frames)', () => {
   it.each(panels)('%s: every wrong field is flagged (zero silent errors)', (_name, panel) => {
     const words = panel.words;
     const def = snapshot.echoDefs.find((d) => d.name === panel.expected.name);
@@ -259,12 +294,12 @@ describe('parsePanel on 17 real OCR reads (tesseract.js 7, 4-pass)', () => {
     expect(wrongAndSilent).toEqual([]);
   });
 
-  it('reads 14 of 17 panels with no flags at all', () => {
+  it('reads 31 of 33 panels with no flags at all (the rest: one approximate name, one Rover choice)', () => {
     const clean = panels.filter(([, panel]) => {
       const def = snapshot.echoDefs.find((d) => d.name === panel.expected.name)!;
       return parsePanel(panel.words, { sonataId: def.sonataIds[0], rarity: 5 }, snapshot).flags.length === 0;
     });
-    expect(clean).toHaveLength(14);
+    expect(clean).toHaveLength(31);
   });
 
   it('reads the reference panel (Threnodian Leviathan) exactly', () => {

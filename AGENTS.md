@@ -91,6 +91,8 @@ Never hand-copy the host into HTML or components.
   in `vite.config.ts`):
   - `connect-src 'self'` (browsers never call the provider API);
   - `img-src` adds `https://api.encore.moe` for game art;
+  - `media-src blob:` only, for the Echo scanner's picked screen recording
+    (opened via an object URL; Chromium rejects it without this);
   - the inline theme script is allowed by an auto-computed sha256, never
     `'unsafe-inline'`/`'unsafe-eval'`.
 
@@ -392,15 +394,22 @@ interface Team {
   absent; hover (mouse) or tap (touch) freezes her on the current frame via
   canvas. Phones (<md) get a fixed bottom tab bar instead of the top nav. The art is user-supplied — don't add more character art. Theme
   state lives in `src/state/theme.ts`.
-- Echo scanner (screenshots of the in-game Echo Management panel -> OCR ->
-  review -> import; plan + Phase 0 results in
+- Echo scanner (screenshots or a screen recording of the in-game Echo
+  Management panel -> OCR -> review -> import; plan + measurements in
   `.agents/plans/2026-10-16-echo-scanner.md`) is the `src/scanner/` layer,
   beside the optimizer (UI -> scanner -> domain -> data). Pure:
-  `parse.ts` (content-located fields, closed-vocab matching, nothing
-  silently corrected — every non-exact read is flagged), `values.ts`
-  (tier/range validation), `layout.ts` + `pipeline.ts` (the 4-pass OCR
-  plan), `draft.ts`, `review.ts`. Browser-only: `engine.ts` (tesseract.js
-  pool, lazily imported by `state/scanStore.ts`). Sonata and rarity are
+  `parse.ts` (content-located fields, closed-vocab matching with I/l/1 and
+  O/0 folded, nothing silently corrected — every non-exact read is
+  flagged, with the row it came from), `values.ts` (tier/range
+  validation), `layout.ts` + `pipeline.ts` (passes 1–4, then pass 5
+  re-reads only flagged rows in single-line mode and keeps a strip only
+  if `parseCost` drops — unread fields outrank flag counts), `draft.ts`,
+  `review.ts` (owned Echoes and in-scan repeats start unticked), `video.ts`
+  (panel-change detector: name line x < 0.55 + stat block, threshold 2.5,
+  measured on a real recording). Browser-only: `engine.ts` (tesseract.js
+  pool) and `videoFrames.ts` (4× playback via requestVideoFrameCallback,
+  gaps over 0.25 s refilled by seeking, so dropped frames cost time, never
+  an Echo), both lazily imported by `state/scanStore.ts`. Sonata and rarity are
   NOT read from pixels — the user mirrors the in-game filter per batch.
   OCR runtime is self-hosted under `ocr/<tesseract version>/` by the
   `ocrAssets` plugin in `vite.config.ts` (never precached, never a CDN;
@@ -411,9 +420,10 @@ interface Team {
   message, and the rest of the batch is read.
   Regression gate: `src/scanner/fixtures/panels.json` (real OCR words +
   hand-read truth) must keep ZERO silent errors. Real screenshots live
-  only in gitignored `scan-fixtures/`; re-measure engine changes with
-  `npx tsx scripts/scan-spike.ts` then `npx tsx scripts/scan-eval.ts
-  scan-fixtures/ocr js4pass`.
+  only in gitignored `scan-fixtures/` (video frames in
+  `scan-fixtures/video/`); re-measure engine changes with
+  `npx tsx scripts/scan-spike.ts scan-fixtures/*.png scan-fixtures/video/*.png`
+  then `npx tsx scripts/scan-eval.ts scan-fixtures/ocr js5pass`.
 - Roll quality (Echo substat tiers, 10-block roll value) is the pure module
   `src/domain/rollValue.ts` over `SUB_STAT_TIERS`; UI only renders it.
 - Unused-Echo finder: the pure optimizer module `src/optimizer/unused.ts`

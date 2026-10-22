@@ -1,7 +1,7 @@
 import { createWorker, PSM, type Page, type Worker } from 'tesseract.js';
 import { panelRect } from './layout.ts';
 import type { OcrWord } from './parse.ts';
-import { readPanelWords, type OcrFn } from './pipeline.ts';
+import { readPanel, type OcrFn, type PanelRead, type ParseFn } from './pipeline.ts';
 
 /**
  * Scanner layer, browser side: binds the pure 4-pass plan (pipeline.ts)
@@ -18,15 +18,16 @@ import { readPanelWords, type OcrFn } from './pipeline.ts';
  * repos. The service worker's `wuwa-ocr` cache keeps the files instead.
  */
 
-export interface FrameWords {
-  words: OcrWord[];
+export interface FrameRead extends PanelRead {
   width: number;
   height: number;
 }
 
+/** OCR + parse one screenshot/frame (passes 1–5). Rejects if the image cannot be decoded. */
+export type FrameReader = (image: Blob, parse: ParseFn) => Promise<FrameRead>;
+
 export interface ScanEngine {
-  /** OCR one screenshot/frame. Rejects if the image cannot be decoded. */
-  read: (image: Blob) => Promise<FrameWords>;
+  read: FrameReader;
   terminate: () => Promise<void>;
 }
 
@@ -53,7 +54,7 @@ async function frameSize(image: Blob): Promise<{ width: number; height: number }
 function bindOcr(worker: Worker, image: Blob): OcrFn {
   return async (rect, mode) => {
     await worker.setParameters({
-      tessedit_pageseg_mode: mode === 'sparse' ? PSM.SPARSE_TEXT : PSM.SINGLE_BLOCK,
+      tessedit_pageseg_mode: mode === 'sparse' ? PSM.SPARSE_TEXT : mode === 'line' ? PSM.SINGLE_LINE : PSM.SINGLE_BLOCK,
       tessedit_char_whitelist: mode === 'digits' ? '0123456789.%' : '',
     });
     const { data } = await worker.recognize(image, { rectangle: rect }, { blocks: true });
@@ -88,12 +89,12 @@ export async function createScanEngine(size = 2): Promise<ScanEngine> {
   };
 
   return {
-    read: async (image) => {
+    read: async (image, parse) => {
       const { width, height } = await frameSize(image);
       const worker = await acquire();
       try {
-        const words = await readPanelWords(bindOcr(worker, image), width, height);
-        return { words, width, height };
+        const read = await readPanel(bindOcr(worker, image), width, height, parse);
+        return { ...read, width, height };
       } finally {
         release(worker);
       }

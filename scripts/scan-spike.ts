@@ -5,7 +5,7 @@
  * Web Worker) and dumps words + bboxes to
  * `scan-fixtures/ocr/<name>.<variant>.json` for `scan-eval.ts`.
  *
- * Runs `readPanelWords` (src/scanner/pipeline.ts) — the exact 4-pass
+ * Runs `readPanel` (src/scanner/pipeline.ts) — the exact 5-pass
  * plan the app runs — bound to a node tesseract.js worker.
  *
  * `--pre red|gray` OCRs a 2× ImageMagick-preprocessed copy instead (red
@@ -19,8 +19,9 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { createWorker, PSM, type Page } from 'tesseract.js';
 import type { Rect } from '../src/scanner/layout.ts';
-import type { OcrWord } from '../src/scanner/parse.ts';
-import { readPanelWords, type OcrFn } from '../src/scanner/pipeline.ts';
+import { snapshotSchema } from '../src/data/schema.ts';
+import { parsePanel, type OcrWord } from '../src/scanner/parse.ts';
+import { readPanel, type OcrFn } from '../src/scanner/pipeline.ts';
 
 const FIXTURES = 'scan-fixtures';
 const LANG_PATH = 'node_modules/@tesseract.js-data/eng/4.0.0_best_int';
@@ -56,11 +57,12 @@ function scaled(r: Rect, scale: number): Rect {
 
 async function main(): Promise<void> {
   const pre = argValue('--pre');
-  const variant = argValue('--variant') ?? (pre ? `js4pass-${pre}` : 'js4pass');
+  const variant = argValue('--variant') ?? (pre ? `js5pass-${pre}` : 'js5pass');
   const named = process.argv.slice(2).filter((a, i, all) => !a.startsWith('--') && !all[i - 1]?.startsWith('--'));
   const files = named.length > 0 ? named : readdirSync(FIXTURES).filter((f) => f.endsWith('.png')).map((f) => join(FIXTURES, f));
   mkdirSync(join(FIXTURES, 'ocr'), { recursive: true });
 
+  const snapshot = snapshotSchema.parse(JSON.parse(readFileSync('src/data/generated/snapshot.json', 'utf8')));
   const worker = await createWorker('eng', 1, { langPath: LANG_PATH, cachePath: join(FIXTURES, '.cache') });
   let total = 0;
   for (const file of files) {
@@ -76,13 +78,15 @@ async function main(): Promise<void> {
     }
     const ocr: OcrFn = async (rect, mode) => {
       await worker.setParameters({
-        tessedit_pageseg_mode: mode === 'sparse' ? PSM.SPARSE_TEXT : PSM.SINGLE_BLOCK,
+        tessedit_pageseg_mode: mode === 'sparse' ? PSM.SPARSE_TEXT : mode === 'line' ? PSM.SINGLE_LINE : PSM.SINGLE_BLOCK,
         tessedit_char_whitelist: mode === 'digits' ? '0123456789.%' : '',
       });
       return pageWords((await worker.recognize(image, { rectangle: scaled(rect, scale) }, { blocks: true })).data, scale);
     };
     const started = performance.now();
-    const words = await readPanelWords(ocr, width, height);
+    // The retry pass needs a parse; the batch Sonata is irrelevant to which
+    // rows get re-read (a Sonata flag has no row), so a blank batch is fine.
+    const { words } = await readPanel(ocr, width, height, (w) => parsePanel(w, { sonataId: '', rarity: 5 }, snapshot));
     const ms = Math.round(performance.now() - started);
     total += ms;
     const name = basename(file, '.png');

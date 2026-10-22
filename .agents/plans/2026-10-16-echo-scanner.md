@@ -2,6 +2,36 @@
 
 Get the user's in-game Echo inventory (738 Echoes in the 2026-10-16 screenshot) into the app without hand entry. The app reads the game's **Echo Management** detail panel (name, `+level`, Sonata icon, COST, 2 main stats, up to 5 substats, "Equipped by X") from screen pixels, OCRs it in the browser, validates every value against the game's closed vocabularies and discrete roll tables, and stages the result for review before it touches `ownedEchoes`. Multi-session project. Each phase can be verified on its own and leaves the app working.
 
+## Status (2026-10-22): Phase 4, video input
+
+- **Sample:** the user's 32.7 s, 60 fps, 1894×1062 H.264 recording, clicking through the Windward Pilgrimage filter at ~1 Echo/s: 16 panels, 15 distinct Echoes (one Spectro Drake visited twice). Hand-read truth is in `scan-fixtures/truth.json` (`vid-seg00`–`15`), and the frames are in `scan-fixtures/video/`.
+- **Change detector** (`src/scanner/video.ts`), measured on that recording at 10 fps, 96×128 gray:
+  - text switches in one step (difference 5.3–12.3); idle noise ≤ 0.72; threshold 2.5.
+  - The animated art is the main false trigger. Comparing only the name line (x < 0.55) and the stat block took it from 19 segments to the true 16.
+  - The OCR frame is the first sample ≥ 0.2 s into a panel; a shorter panel is read from its last sample, never dropped.
+- **Five passes now:** passes 1–4, then pass 5 re-reads only the rows the parser flagged, in single-line mode (PSM 7), adopting a strip only if `parseCost` drops.
+  - It fixed the two block-mode misreads in the video ("DEF 60" → "0", "Fleurdelys" → "Fledrel=gis").
+  - The first version ranked parses by flag count and picked a *worse* read: a lost name also silences the checks that depend on it. Unread fields now outrank flags.
+  - Re-read strips use `textLineBox` (top edge + smallest wordy height), because art inflates name-row word boxes.
+- **Other parser fixes from the video:**
+  - The value column runs down to the footer; a missed last value had been sliced in half.
+  - A label with no value is an error row, not a silent drop.
+  - I/l/1 and O/0 are folded in vocab matching ("luno" → Iuno) when that leaves exactly one candidate.
+- **Results:**
+  - `scan-eval` js5pass over all 33 panels (17 screenshots + 16 video frames): **396/396 fields correct, 0 silent errors**, 31/33 panels need no review (one approximate name, one Rover choice).
+  - Committed fixtures now hold all 33.
+- **Walk (`videoFrames.ts`), measured in Chromium 155:**
+  - Seeking costs 126 ms/sample (a keyframe every 2 s), so the first version took 46.5 s for the clip.
+  - It now plays at 4× via requestVideoFrameCallback, decimated to ~10 fps, and refills any gap over 0.25 s by seeking; it also pauses while the tab is hidden.
+  - The clip now takes 11.3 s including OCR, with identical results: 16 panels, all Ready, every value correct, the revisit flagged.
+  - Stress at 16× playback (constant gap repair): all 15 Echoes found with correct values; one Echo split into two segments (caught as a repeat, unticked) and one benign "COST not read" review.
+- **Review:** in-scan repeats (identical rolls) start unticked with "Same rolls as #n", and video frames with no Echo panel (no name, cost or main stat) are dropped and counted.
+- **CSP:** `media-src blob:` was needed. Without it Chromium rejects the object URL ("Media load rejected by URL safety check").
+- **Next:**
+  - live capture (`getDisplayMedia`), which can reuse the detector and the walker's capture logic;
+  - Phase 5 rescan sync.
+- **Open risk:** a sample landing mid-transition could give a blended frame. It wasn't seen at 4× (16/16 clean), and it would surface as a flagged or repeat row, never a silent one.
+
 ## Status (2026-10-16)
 
 - **Phase 0 done.** 17 user screenshots in gitignored `scan-fixtures/` (+ hand-read `truth.json`). Results (`scripts/scan-eval.ts`), fields correct out of 204 / silent errors:

@@ -41,6 +41,13 @@ describe('valueColumnRect', () => {
     expect(valueColumnRect(PASS1, panel)).toEqual({ left: 1716, top: 419, width: 1920 - 1716, height: 619 - 419 });
   });
 
+  it('extends down to the footer when that is lower (a missed last value must not be sliced)', () => {
+    // Same column as above, but the footer starts at 700: bottom = 700, not 619.
+    expect(valueColumnRect(PASS1, panel, 700)).toEqual({ left: 1716, top: 419, width: 204, height: 700 - 419 });
+    // A higher footer never shortens the column.
+    expect(valueColumnRect(PASS1, panel, 500)?.height).toBe(619 - 419);
+  });
+
   it('is null without stat rows to anchor on', () => {
     expect(valueColumnRect(PASS1.slice(0, 4), panel)).toBeNull();
   });

@@ -60,7 +60,7 @@ function statRows(rows: readonly OcrRow[], panel: Rect): OcrRow[] {
  * short of the longest unwrapped label). Null when pass 1 found no stat
  * rows to anchor on.
  */
-export function valueColumnRect(pass1: readonly OcrWord[], panel: Rect): Rect | null {
+export function valueColumnRect(pass1: readonly OcrWord[], panel: Rect, bottomLimit = 0): Rect | null {
   const rows = statRows(groupRows(pass1), panel);
   if (rows.length === 0) return null;
   const values = rows.map((r) => r.words[r.words.length - 1].bbox);
@@ -70,7 +70,10 @@ export function valueColumnRect(pass1: readonly OcrWord[], panel: Rect): Rect | 
   const lineHeight = Math.max(...values.map((b) => b.y1 - b.y0));
   const left = Math.max(panel.left, Math.round(valueRight - 1.5 * widest));
   const top = Math.max(panel.top, Math.round(Math.min(...rows.map((r) => r.bbox.y0)) - 2 * lineHeight));
-  const end = Math.min(bottom(panel), Math.round(Math.max(...rows.map((r) => r.bbox.y1)) + 2 * lineHeight));
+  // Down to the footer when known: if pass 1 missed the LAST row's value,
+  // two line-heights under the last row it did find can slice that row's
+  // digits in half (2026-10-22 video: "Energy Regen 9.2%" lost).
+  const end = Math.min(bottom(panel), Math.max(bottomLimit, Math.round(Math.max(...rows.map((r) => r.bbox.y1)) + 2 * lineHeight)));
   return { left, top, width: panelRight - left, height: end - top };
 }
 

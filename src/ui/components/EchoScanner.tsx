@@ -11,8 +11,9 @@ import { EchoForm, type EchoFormValues } from './EchoForm.tsx';
 import { Alert, CostPips, EmptyState, Window } from './ui.tsx';
 
 /**
- * Echo scanner window: screenshots of the in-game Echo Management detail
- * panel -> OCR (scanner layer, off the main thread) -> review -> import.
+ * Echo scanner window: screenshots or a screen recording of the in-game
+ * Echo Management detail panel -> OCR (scanner layer, off the main
+ * thread) -> review -> import.
  * Rendering and input only; every decision (what a read means, whether a
  * row is importable, whether it is already owned) comes from
  * `scanner/review.ts`.
@@ -65,8 +66,23 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
   const snapshot = useSnapshotStore((s) => s.snapshot);
   const owned = useInventoryStore((s) => s.echoes);
   const importEchoes = useInventoryStore((s) => s.importEchoes);
-  const { batch, items, engine, engineError, setBatch, addImages, setEquipped, setOverride, setInclude, remove, clear } =
-    useScanStore();
+  const {
+    batch,
+    items,
+    engine,
+    engineError,
+    video,
+    lastVideo,
+    setBatch,
+    addImages,
+    addVideo,
+    cancelVideo,
+    setEquipped,
+    setOverride,
+    setInclude,
+    remove,
+    clear,
+  } = useScanStore();
   const [fixing, setFixing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -77,10 +93,18 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
   const inBatch = items.filter((it) => it.batch.sonataId === batch.sonataId).length;
 
   const add = (files: FileList | File[] | null): void => {
-    const images = Array.from(files ?? []).filter((f) => f.type.startsWith('image/'));
-    if (images.length === 0) return;
+    const picked = Array.from(files ?? []);
+    const images = picked.filter((f) => f.type.startsWith('image/'));
+    const videos = picked.filter((f) => f.type.startsWith('video/'));
+    if (images.length === 0 && videos.length === 0) return;
     setError(null);
-    addImages(images).catch((err: unknown) => setError(err instanceof Error ? err.message : 'Could not add those images.'));
+    const fail = (fallback: string) => (err: unknown) => setError(err instanceof Error ? err.message : fallback);
+    if (images.length > 0) addImages(images).catch(fail('Could not add those images.'));
+    // One recording at a time; walk them in order.
+    void videos.reduce<Promise<void>>(
+      (prev, v) => prev.then(() => addVideo(v)).catch(fail('Could not scan that recording.')),
+      Promise.resolve(),
+    );
   };
 
   const onDrop = (e: DragEvent<HTMLDivElement>): void => {
@@ -124,7 +148,11 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
         <ol className="list-decimal space-y-0.5 pl-5 text-sm text-fog">
           <li>In game, open Echo Management → Filter, and pick one Sonata set (and 5-Star).</li>
           <li>Choose the same set here — the panel shows the set only as an icon, so the filter is how it is known.</li>
-          <li>Click each Echo and screenshot it (the whole window, or a region that includes the right-hand panel), then drop the images here.</li>
+          <li>
+            Click through the Echoes while recording the screen (or screenshot each one — the whole window, or a region
+            that includes the right-hand panel), then drop the recording or the images here. Pause about half a second on
+            each Echo.
+          </li>
         </ol>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem_10rem_auto] sm:items-end">
@@ -179,18 +207,18 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
             <button
               type="button"
               disabled={batch.sonataId === ''}
-              title={batch.sonataId === '' ? 'Pick the Sonata set first' : 'Choose screenshots to scan'}
+              title={batch.sonataId === '' ? 'Pick the Sonata set first' : 'Choose screenshots or a screen recording to scan'}
               onClick={() => fileRef.current?.click()}
               className={btnPrimary}
             >
-              Add screenshots
+              Add screenshots or video
             </button>
             <input
               ref={fileRef}
               type="file"
-              accept="image/*"
+              accept="image/*,video/*"
               multiple
-              aria-label="Echo screenshots"
+              aria-label="Echo screenshots or recording"
               className="sr-only"
               onChange={(e) => {
                 add(e.target.files);
@@ -199,6 +227,31 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
             />
           </div>
         </div>
+
+        {video !== null && (
+          <Alert tone="info" role="status" className="mt-4">
+            <span className="flex flex-wrap items-center justify-between gap-2">
+              <span>
+                {`Scanning ${video.fileName}: ${video.t.toFixed(1)} / ${video.duration > 0 ? video.duration.toFixed(1) : '…'} s · ${video.found} ${video.found === 1 ? 'Echo' : 'Echoes'} found`}
+              </span>
+              <button type="button" onClick={cancelVideo} className={`${btnGhost} ${btnSm}`}>
+                Cancel
+              </button>
+            </span>
+          </Alert>
+        )}
+        {lastVideo !== null && video === null && (
+          <Alert tone={lastVideo.error !== null ? 'danger' : 'info'} role="status" className="mt-4">
+            {[
+              `${lastVideo.fileName}: ${lastVideo.found} Echo ${lastVideo.found === 1 ? 'panel' : 'panels'} found`,
+              lastVideo.skipped > 0 ? `${lastVideo.skipped} ${lastVideo.skipped === 1 ? 'frame' : 'frames'} without an Echo panel skipped` : null,
+              lastVideo.cancelled ? 'cancelled' : null,
+              lastVideo.error,
+            ]
+              .filter((x) => x !== null)
+              .join(' · ')}
+          </Alert>
+        )}
 
         {engine === 'loading' && (
           <Alert tone="info" role="status" className="mt-4">
@@ -216,7 +269,7 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
 
         {items.length === 0 ? (
           <div className="mt-4">
-            <EmptyState>Nothing scanned yet. Screenshots are read on this device and never uploaded.</EmptyState>
+            <EmptyState>Nothing scanned yet. Screenshots and recordings are read on this device and never uploaded.</EmptyState>
           </div>
         ) : (
           <>
@@ -229,6 +282,7 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
                 summary.fix > 0 ? `${summary.fix} to fix` : null,
                 summary.failed > 0 ? `${summary.failed} unreadable` : null,
                 summary.known > 0 ? `${summary.known} already in your inventory` : null,
+                summary.repeats > 0 ? `${summary.repeats} scanned twice` : null,
               ]
                 .filter((x) => x !== null)
                 .join(' · ')}
@@ -241,9 +295,10 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
             )}
 
             <ul className="mt-3 space-y-2">
-              {rows.map((row) => (
+              {rows.map((row, index) => (
                 <ScanRow
                   key={row.item.id}
+                  index={index}
                   row={row}
                   snapshot={snapshot}
                   fixing={fixing === row.item.id}
@@ -275,6 +330,7 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
 }
 
 function ScanRow({
+  index,
   row,
   snapshot,
   fixing,
@@ -284,6 +340,8 @@ function ScanRow({
   onEquip,
   onRemove,
 }: {
+  /** 0-based position in the list; shown as "#n" so repeats can point at their first copy. */
+  index: number;
   row: ReviewRow;
   snapshot: Snapshot;
   fixing: boolean;
@@ -316,6 +374,7 @@ function ScanRow({
         )}
         <div className="min-w-0 flex-1 text-sm">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="text-xs text-fog tnum">{`#${index + 1}`}</span>
             <span className="font-bold text-ink">{title}</span>
             {cost !== null && (
               <span className="flex items-center gap-1 text-xs text-fog">
@@ -328,6 +387,11 @@ function ScanRow({
             <span className={`text-xs font-bold ${STATE_CLASS[state]}`}>{STATE_LABEL[state]}</span>
             {row.known && <span className="text-xs text-fog">already in inventory</span>}
           </div>
+          {row.repeatOf !== null && (
+            <p className="mt-1 text-xs text-amber">
+              {`Same rolls as #${row.repeatOf + 1} — probably clicked twice. Tick Add only if you own both.`}
+            </p>
+          )}
 
           {item.status === 'failed' && <p className="mt-1 text-xs text-ember">{item.error}</p>}
 

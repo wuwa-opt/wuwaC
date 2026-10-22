@@ -102,6 +102,10 @@ function gamedataPublication(): Plugin {
  *   published `gamedata/` files; browsers never call the provider API.
  * - img-src: provider icon CDN (`iconUrl` in the snapshot); other hosts fall
  *   back to the initials badge.
+ * - media-src blob: the Echo scanner opens a screen recording the user
+ *   picked through an object URL (scanner/videoFrames.ts). No network
+ *   media is ever loaded; without it Chromium rejects the load ("Media load
+ *   rejected by URL safety check").
  */
 const CSP_DIRECTIVES = [
   "default-src 'none'",
@@ -110,6 +114,7 @@ const CSP_DIRECTIVES = [
   "style-src 'self'",
   "img-src 'self' data: blob: https://api.encore.moe",
   "font-src 'self'",
+  'media-src blob:',
   "connect-src 'self'",
   "manifest-src 'self'",
   "object-src 'none'",

@@ -60,6 +60,17 @@ export interface ScanFlag {
   /** `review` = draft usable but a human should glance; `error` = blocks import. */
   severity: 'review' | 'error';
   message: string;
+  /**
+   * The on-screen row the flag is about (frame pixels), when there is one.
+   * The pipeline re-reads exactly these rows in single-line mode.
+   */
+  row?: FlagRow;
+}
+
+export interface FlagRow {
+  bbox: OcrBox;
+  /** Text lines inside the bbox (2 for a wrapped stat label). */
+  lines: number;
 }
 
 export interface ScannedStat {
@@ -145,6 +156,20 @@ export function groupRows(words: readonly OcrWord[]): OcrRow[] {
     .sort((a, b) => centerY(a.bbox) - centerY(b.bbox));
 }
 
+/**
+ * The text line of a header/footer row, for re-reading it. Echo art
+ * bleeds into these rows and inflates word boxes downward ("Fledrel=gis"
+ * spanned 64 px for ~30 px of text), but the text itself is top-aligned:
+ * take the words' common top edge and the SMALLEST wordy box height.
+ */
+export function textLineBox(row: OcrRow): OcrBox {
+  const wordy = row.words.filter((w) => /[a-z0-9]{2,}/i.test(w.text));
+  const words = wordy.length > 0 ? wordy : row.words;
+  const y0 = Math.min(...words.map((w) => w.bbox.y0));
+  const h = Math.min(...words.map((w) => height(w.bbox)));
+  return { x0: row.bbox.x0, y0, x1: row.bbox.x1, y1: y0 + h };
+}
+
 // --- Vocabularies --------------------------------------------------------------
 
 /** On-screen stat labels (English client) -> stat family. */
@@ -218,6 +243,7 @@ interface StatRow {
   labelWords: string[];
   valueText: string;
   bbox: OcrBox;
+  lines: number;
 }
 
 /** Trailing value token(s): "10.8%", or "10.8" + "%" split by the engine. */
@@ -231,7 +257,7 @@ function splitValue(row: OcrRow): StatRow | null {
     labelEnd = texts.length - 2;
   }
   if (parseNumberToken(valueText) === null) return null;
-  return { labelWords: texts.slice(0, labelEnd), valueText, bbox: row.bbox };
+  return { labelWords: texts.slice(0, labelEnd), valueText, bbox: row.bbox, lines: 1 };
 }
 
 /** A label-only row directly under a stat row is its wrapped second line ("Bonus", "DMG Bonus"). */
@@ -250,8 +276,8 @@ const STOP_RE = /echo\s*skill|equipped\s*by/i;
 export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot: Snapshot): PanelParse {
   const rows = groupRows(words);
   const flags: ScanFlag[] = [];
-  const flag = (field: ScanField, severity: ScanFlag['severity'], message: string): void => {
-    flags.push({ field, severity, message });
+  const flag = (field: ScanField, severity: ScanFlag['severity'], message: string, row?: FlagRow): void => {
+    flags.push(row === undefined ? { field, severity, message } : { field, severity, message, row });
   };
 
   // COST anchors the layout.
@@ -285,10 +311,12 @@ export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot
     }
   }
   if (bestName === null) {
-    flag('name', 'error', 'Echo name not recognized');
+    // The topmost wordy header row is where the name sits.
+    const nameRow = header.find((r) => /[a-z]{4,}/i.test(r.text));
+    flag('name', 'error', 'Echo name not recognized', nameRow === undefined ? undefined : { bbox: textLineBox(nameRow), lines: 1 });
   } else {
     def = bestName.value;
-    if (!bestName.exact) flag('name', 'review', `name read approximately as ${def.name}`);
+    if (!bestName.exact) flag('name', 'review', `name read approximately as ${def.name}`, { bbox: textLineBox(header[nameIndex]), lines: 1 });
   }
 
   // Cost.
@@ -342,6 +370,11 @@ export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot
     } else if (prev !== undefined && isWrapContinuation(row, prev)) {
       prev.labelWords.push(...row.words.map((w) => w.text));
       prev.bbox = { ...prev.bbox, y1: row.bbox.y1 };
+      prev.lines += 1;
+    } else if (prev !== undefined && bestSpanMatch(row.words.map((w) => w.text), STAT_LABELS) !== null) {
+      // A stat label whose value was not read: keep the row so it errors
+      // (and gets re-read) instead of silently shortening the Echo.
+      statRows.push({ labelWords: row.words.map((w) => w.text), valueText: '', bbox: row.bbox, lines: 1 });
     }
   }
 
@@ -351,23 +384,24 @@ export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot
       flag(field, 'error', 'row not read');
       return null;
     }
+    const at: FlagRow = { bbox: row.bbox, lines: row.lines };
     const label = bestSpanMatch(row.labelWords, STAT_LABELS);
     if (label === null) {
-      flag(field, 'error', `stat label "${row.labelWords.join(' ')}" not recognized`);
+      flag(field, 'error', `stat label "${row.labelWords.join(' ')}" not recognized`, at);
       return null;
     }
     const token = parseNumberToken(row.valueText);
     if (token === null) {
-      flag(field, 'error', `value "${row.valueText}" not readable`);
+      flag(field, 'error', row.valueText === '' ? `${label.text} value not read` : `value "${row.valueText}" not readable`, at);
       return null;
     }
     const read = reader(label.value, token);
     if (read.status === 'invalid') {
-      flag(field, 'error', read.note);
+      flag(field, 'error', read.note, at);
       return null;
     }
-    if (!label.exact) flag(field, 'review', `label read approximately as ${label.text}`);
-    if (read.status !== 'exact') flag(field, 'review', read.note ?? read.status);
+    if (!label.exact) flag(field, 'review', `label read approximately as ${label.text}`, at);
+    if (read.status !== 'exact') flag(field, 'review', read.note ?? read.status, at);
     return { stat: read.stat, value: read.value };
   };
 
@@ -403,14 +437,16 @@ export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot
   if (equippedRow !== undefined) {
     const who = equippedRow.text.replace(/^.*?equipped\s*by\s*/i, '');
     const resolved = resolveCharacter(who, snapshot.characters);
+    const at: FlagRow = { bbox: textLineBox(equippedRow), lines: 1 };
     if (resolved.kind === 'one') {
       equippedTo = resolved.id;
-      if (!resolved.exact) flag('equipped', 'review', `equipped character read approximately as ${resolved.name}`);
+      if (!resolved.exact) flag('equipped', 'review', `equipped character read approximately as ${resolved.name}`, at);
     } else if (resolved.kind === 'many') {
       equippedCandidates = resolved.ids;
+      // A real choice (e.g. "Rover"), not a misread: no row to re-read.
       flag('equipped', 'review', `"${who.trim()}" matches ${resolved.ids.length} characters — pick one`);
     } else {
-      flag('equipped', 'review', `equipped character "${who.trim()}" not recognized — left unequipped`);
+      flag('equipped', 'review', `equipped character "${who.trim()}" not recognized — left unequipped`, at);
     }
   }
 

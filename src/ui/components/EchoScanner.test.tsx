@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import fixtures from '../../scanner/fixtures/panels.json';
+import type { ParseFn } from '../../scanner/pipeline.ts';
+import type { VideoScanOptions } from '../../scanner/videoFrames.ts';
 import { db } from '../../state/db.ts';
 import { useInventoryStore } from '../../state/inventory.ts';
 import { setScanDeps, useScanStore } from '../../state/scanStore.ts';
@@ -17,16 +19,13 @@ beforeEach(async () => {
   setScanDeps({
     // Replays the real OCR words recorded for the fixture named like the file.
     createReader: () =>
-      Promise.resolve((image: Blob) => {
+      Promise.resolve((image: Blob, parse: ParseFn) => {
         const panel = PANELS[(image as File).name.replace(/\.png$/, '')];
-        return Promise.resolve({
-          width: panel.frame[0],
-          height: panel.frame[1],
-          words: panel.words.map(([text, x0, y0, x1, y1]) => ({
-            text: String(text),
-            bbox: { x0: Number(x0), y0: Number(y0), x1: Number(x1), y1: Number(y1) },
-          })),
-        });
+        const words = panel.words.map(([text, x0, y0, x1, y1]) => ({
+          text: String(text),
+          bbox: { x0: Number(x0), y0: Number(y0), x1: Number(x1), y1: Number(y1) },
+        }));
+        return Promise.resolve({ width: panel.frame[0], height: panel.frame[1], words, parse: parse(words) });
       }),
     thumbnail: () => Promise.resolve(null),
   });
@@ -94,5 +93,44 @@ describe('EchoScanner', () => {
     await user.selectOptions(within(row).getByRole('combobox'), 'rover-spectro');
     expect(within(row).getByText('Ready')).toBeInTheDocument();
     expect(within(row).getByText('Equipped by Rover: Spectro')).toBeInTheDocument();
+  });
+
+  it('scans a screen recording: one row per panel, a skipped desktop frame, and a revisit flagged', async () => {
+    const user = userEvent.setup();
+    const deps = {
+      createReader: () =>
+        Promise.resolve((image: Blob, parse: ParseFn) => {
+          const name = (image as File).name.replace(/\.png$/, '');
+          const panel = PANELS[name];
+          const words =
+            panel === undefined
+              ? []
+              : panel.words.map(([text, x0, y0, x1, y1]) => ({
+                  text: String(text),
+                  bbox: { x0: Number(x0), y0: Number(y0), x1: Number(x1), y1: Number(y1) },
+                }));
+          return Promise.resolve({ width: 1894, height: 1062, words, parse: parse(words) });
+        }),
+      thumbnail: () => Promise.resolve(null),
+      // Desktop first (no panel), then Spectro -> Fusion -> Spectro again, as in the real recording.
+      scanVideo: (_video: File, options: VideoScanOptions) => {
+        ['desktop', 'vid-seg10', 'vid-seg11', 'vid-seg12'].forEach((name, i) => {
+          options.onFrame(png(name), { start: i, end: i, pick: i });
+          options.onProgress?.(i + 1, 4);
+        });
+        return Promise.resolve({ duration: 4, segments: 4 });
+      },
+    };
+    setScanDeps(deps);
+    render(<EchoScanner onClose={() => undefined} onImported={() => undefined} />);
+    await user.selectOptions(screen.getByLabelText(/sonata set/i), 'windward-pilgrimage');
+    await user.upload(screen.getByLabelText(/echo screenshots or recording/i), new File(['v'], 'clip.mp4', { type: 'video/mp4' }));
+
+    expect(await screen.findByText('clip.mp4: 3 Echo panels found · 1 frame without an Echo panel skipped')).toBeInTheDocument();
+    expect(screen.getByText(/3 scanned · 3 ready · 1 scanned twice/)).toBeInTheDocument();
+    const repeat = screen.getByText(/Same rolls as #1/).closest('li')!;
+    expect(within(repeat).getByText('Spectro Drake')).toBeInTheDocument();
+    expect(within(repeat).getByRole('checkbox', { name: 'Add' })).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Add 2 echoes' })).toBeEnabled();
   });
 });

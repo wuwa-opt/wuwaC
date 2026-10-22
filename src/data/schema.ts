@@ -558,13 +558,20 @@ export type ObjectiveSpec = z.infer<typeof objectiveSpecSchema>;
 
 // --- Share links (v2) -------------------------------------------------------------
 /**
- * Self-contained build link payload (`#b=2.<deflate-raw, base64url>`), decoded
+ * Self-contained build link payload (`#b=2.` or `#b=3.<deflate-raw, base64url>`), decoded
  * from UNTRUSTED input: every object is strict (unknown keys reject), strings
  * and arrays are bounded, numbers are finite (zod 4 rejects NaN/Infinity).
  * Carries game ids and stat values only — never the sender's Echo ids,
  * `equippedTo`, `origin`, notes, or labels. `echoes[0]` is slot 1.
+ *
+ * v3 adds the run settings the build was optimized with (`enemy`,
+ * `resonanceMode`, `minStats`), so the shared score is reproducible. v2 stays
+ * strict: it must not carry them, and the encoder emits v2 when none is set,
+ * so plain links open in app copies that predate v3.
  */
 export const SHARED_BUILD_VERSION = 2;
+/** Link version that may carry the run settings. */
+export const SHARED_BUILD_VERSION_SETTINGS = 3;
 
 const shareId = z.string().min(1).max(64);
 const shareStatSchema = z.strictObject({ stat: statKeySchema, value: z.number().min(0).max(100_000) });
@@ -625,8 +632,33 @@ export const sharedObjectiveSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 
+/**
+ * Enemy settings of a run (`EnemySettings` in `domain/enemy.ts`, which a
+ * test keeps assignable both ways). Bounds mirror `MAX_ENEMY_LEVEL` and
+ * `MAX_ENEMY_RES`; used by `Build.enemy` and the v3 share payload.
+ */
+const enemySettingsSchema = z.object({
+  kind: z.enum(['mob', 'boss']),
+  level: z.number().int().min(1).max(120),
+  baseRES: z.number().min(0).max(0.8),
+});
+
+/** Resonance Mode id: a plain string, since the data layer doesn't own the mode list. */
+const resonanceModeSchema = z.string().min(1).max(40);
+
+/**
+ * Minimums in a share link: untrusted, so tighter than `Build.minStats`.
+ * 1-8 entries (the editors expose 3 stats; 8 leaves room for stats a future
+ * editor adds without letting a payload spend its bytes here), each a finite
+ * value from 0 to 100 000 (the same cap as an Echo stat value above; fractions
+ * and flat HP/ATK/DEF both fit).
+ */
+const sharedMinStatsSchema = z
+  .partialRecord(statKeySchema, z.number().min(0).max(100_000))
+  .refine((m) => Object.keys(m).length >= 1 && Object.keys(m).length <= 8, { message: 'expected 1 to 8 minimum stats' });
+
 export const sharedBuildSchema = z.strictObject({
-  v: z.literal(SHARED_BUILD_VERSION),
+  v: z.union([z.literal(SHARED_BUILD_VERSION), z.literal(SHARED_BUILD_VERSION_SETTINGS)]),
   name: z.string().min(1).max(80),
   score: z.number().optional(),
   /** Short human summary of the objective (the build's `objectiveId` label). */
@@ -650,6 +682,17 @@ export const sharedBuildSchema = z.strictObject({
   }),
   echoes: z.tuple([sharedEchoSchema, sharedEchoSchema, sharedEchoSchema, sharedEchoSchema, sharedEchoSchema]),
   objective: sharedObjectiveSchema.optional(),
+  /** v3 only: the run settings (see the schema comment). */
+  enemy: enemySettingsSchema.strict().optional(),
+  resonanceMode: resonanceModeSchema.optional(),
+  minStats: sharedMinStatsSchema.optional(),
+}).superRefine((b, ctx) => {
+  if (b.v !== SHARED_BUILD_VERSION) return;
+  for (const key of ['enemy', 'resonanceMode', 'minStats'] as const) {
+    if (b[key] !== undefined) {
+      ctx.addIssue({ code: 'custom', path: [key], message: `a v${SHARED_BUILD_VERSION} link can't carry ${key}` });
+    }
+  }
 });
 export type SharedBuild = z.infer<typeof sharedBuildSchema>;
 
@@ -693,26 +736,20 @@ export const buildSchema = z
      * `MAX_ENEMY_RES`; a schema test keeps them in step). Optional and
      * unindexed: no Dexie bump; older builds fall back to the Calculator.
      */
-    enemy: z
-      .object({
-        kind: z.enum(['mob', 'boss']),
-        level: z.number().int().min(1).max(120),
-        baseRES: z.number().min(0).max(0.8),
-      })
-      .optional(),
+    enemy: enemySettingsSchema.optional(),
     /**
      * Resonance Mode the run scored a dual-mode kit in (`characterResonanceModes`).
      * A plain string here: the data layer doesn't own the mode list, and a
      * mode this app doesn't know must not fail a backup restore. Consumers
      * check it against the character's modes and ignore anything else.
      */
-    resonanceMode: z.string().min(1).max(40).optional(),
+    resonanceMode: resonanceModeSchema.optional(),
     /**
      * Sheet-level minimums the optimizer run used (`OptimizeRequest.minStats`),
      * as stored sheet values (fractions: 0.7 = 70% Crit Rate; Energy Regen is
      * the sheet's bonus, which has no 100% base). Saved so team allocation and
      * the unused-Echo finder honour them. Optional and unindexed: no Dexie
-     * bump, backup v1 unchanged. Never in share links.
+     * bump, backup v1 unchanged. Share links (v3) carry it, bounded.
      */
     minStats: z.partialRecord(statKeySchema, z.number().min(0)).optional(),
     updatedAt: z.string().datetime({ offset: true }),

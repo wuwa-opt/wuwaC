@@ -6,7 +6,6 @@ import type {
   RotationBlockSpec,
   RotationBuffSpec,
   SonataSetData,
-  StatKey,
   WeaponData,
 } from '../../data/schema.ts';
 import type { ResonanceMode } from '../../domain/characterMods.ts';
@@ -14,6 +13,7 @@ import type { CritMode, EnemyProfile } from '../../domain/damage.ts';
 import type { EnemySettings } from '../../domain/enemy.ts';
 import { runOptimization, type OptimizationHandle } from '../../optimizer/worker.ts';
 import { selectCandidates, type OptimizeRequest, type SearchData, type SearchResult } from '../../optimizer/search.ts';
+import { useCalculatorStore } from '../../state/calculator.ts';
 import { useLibraryStore } from '../../state/library.ts';
 import { MIN_STAT_FIELDS, parseMinStatTexts } from '../minStatFields.ts';
 import { btnOutline, btnPrimary, labelClass, selectClass } from './classes.ts';
@@ -104,7 +104,9 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
   const [excludeEquipped, setExcludeEquipped] = useState(false);
   const [minLevel, setMinLevel] = useState('0');
   // Empty = no minimum for that stat.
-  const [minTexts, setMinTexts] = useState<Partial<Record<StatKey, string>>>({});
+  // Kept in the Calculator store so "Optimize with my Echoes" can prefill them.
+  const minTexts = useCalculatorStore((s) => s.minStatTexts);
+  const setMinTexts = useCalculatorStore((s) => s.setMinStatTexts);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const [result, setResult] = useState<SearchResult | null>(null);
   const [lastRun, setLastRun] = useState<{ data: SearchData; request: OptimizeRequest; enemy: EnemySettings } | null>(null);
@@ -315,7 +317,7 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
                   <input
                     id={`ropt-min-${stat}`}
                     value={minTexts[stat] ?? ''}
-                    onChange={(e) => setMinTexts((m) => ({ ...m, [stat]: e.target.value }))}
+                    onChange={(e) => setMinTexts({ ...minTexts, [stat]: e.target.value })}
                     inputMode="decimal"
                     className={`${selectClass} mt-0.5`}
                   />

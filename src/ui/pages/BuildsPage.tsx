@@ -20,6 +20,7 @@ import { GameIcon } from '../components/GameIcon.tsx';
 import { BuildDetail } from '../components/BuildDetail.tsx';
 import { ReferenceBuildDetail } from '../components/ReferenceBuildDetail.tsx';
 import { missingSlots } from '../echoDisplay.ts';
+import { minStatTextsFor } from '../minStatFields.ts';
 import { SharedBuildCard } from '../components/SharedBuildCard.tsx';
 import { btnDangerGhost, btnGhost, btnOutline, btnPrimary, inputClass, labelClass } from '../components/classes.ts';
 import { Skeleton } from '../components/feedback.tsx';
@@ -47,6 +48,7 @@ export function BuildsPage() {
   const rosterLoaded = useRosterStore((s) => s.loaded);
   const loadRoster = useRosterStore((s) => s.load);
   const loadSharedDraft = useCalculatorStore((s) => s.loadSharedDraft);
+  const setMinStatTexts = useCalculatorStore((s) => s.setMinStatTexts);
   const setActiveSection = useAppStore((s) => s.setActiveSection);
 
   const shareLink = useAppStore((s) => s.shareLink);
@@ -148,6 +150,9 @@ export function BuildsPage() {
     if (!character) return;
     const draft = sharedCalculatorDraft(payload, character);
     loadSharedDraft(draft);
+    // A v3 link states the sender's minimums, so absent means none: clear the boxes.
+    // A v2 link says nothing about them, so the boxes stay as they are.
+    if (payload.v === 3) setMinStatTexts(minStatTextsFor(draft.minStats));
     if (draft.skippedBlocks > 0) {
       pushToast(`Skipped ${draft.skippedBlocks} rotation step${draft.skippedBlocks === 1 ? '' : 's'} your game data doesn’t know.`);
     }

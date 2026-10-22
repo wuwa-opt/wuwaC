@@ -6,16 +6,16 @@ import type {
   RotationBlockSpec,
   RotationBuffSpec,
   SonataSetData,
-  StatKey,
   WeaponData,
 } from '../../data/schema.ts';
 import type { ResonanceMode } from '../../domain/characterMods.ts';
 import type { CritMode, EnemyProfile } from '../../domain/damage.ts';
-import type { EnemySettings } from '../../optimizer/allocateMembers.ts';
+import type { EnemySettings } from '../../domain/enemy.ts';
 import { runOptimization, type OptimizationHandle } from '../../optimizer/worker.ts';
 import { selectCandidates, type OptimizeRequest, type SearchData, type SearchResult } from '../../optimizer/search.ts';
+import { useCalculatorStore } from '../../state/calculator.ts';
 import { useLibraryStore } from '../../state/library.ts';
-import { parseDisplayValue } from '../format.ts';
+import { MIN_STAT_FIELDS, parseMinStatTexts } from '../minStatFields.ts';
 import { btnOutline, btnPrimary, labelClass, selectClass } from './classes.ts';
 import { Collapsible } from './Collapsible.tsx';
 import { RunClock } from './feedback.tsx';
@@ -49,18 +49,6 @@ interface RotationOptimizerProps {
 
 /** Candidate count from which the Sonata lock tip is shown. */
 const LOCK_TIP_MIN_CANDIDATES = 100;
-
-/**
- * The optional minimum-stat inputs, in the order shown. Typed as % and stored
- * as sheet fractions (`parseDisplayValue`), which is what `minStats` expects.
- * Crit Rate/Crit DMG sheet values include the 5%/150% bases; Energy Regen is
- * the sheet's bonus only (no base is seeded), so it reads as a bonus.
- */
-const MIN_STAT_FIELDS: { stat: StatKey; label: string; hint?: string }[] = [
-  { stat: 'energyRegen', label: 'Energy Regen %', hint: 'Bonus only — the base isn\'t counted' },
-  { stat: 'critRate', label: 'Crit Rate %' },
-  { stat: 'critDmg', label: 'Crit DMG %' },
-];
 
 /**
  * What the user sees while a search runs. The search can sit for minutes
@@ -116,7 +104,9 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
   const [excludeEquipped, setExcludeEquipped] = useState(false);
   const [minLevel, setMinLevel] = useState('0');
   // Empty = no minimum for that stat.
-  const [minTexts, setMinTexts] = useState<Partial<Record<StatKey, string>>>({});
+  // Kept in the Calculator store so "Optimize with my Echoes" can prefill them.
+  const minTexts = useCalculatorStore((s) => s.minStatTexts);
+  const setMinTexts = useCalculatorStore((s) => s.setMinStatTexts);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const [result, setResult] = useState<SearchResult | null>(null);
   const [lastRun, setLastRun] = useState<{ data: SearchData; request: OptimizeRequest; enemy: EnemySettings } | null>(null);
@@ -161,18 +151,12 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
       setStatus({ kind: 'error', message: 'Pick two different Sonata sets for the 2+2 lock.' });
       return;
     }
-    const minStats: Partial<Record<StatKey, number>> = {};
-    for (const { stat, label } of MIN_STAT_FIELDS) {
-      const text = minTexts[stat]?.trim() ?? '';
-      if (text === '') continue;
-      try {
-        const value = parseDisplayValue(stat, text);
-        if (value > 0) minStats[stat] = value;
-      } catch {
-        setStatus({ kind: 'error', message: `Minimum ${label.replace(' %', '')} must be a non-negative number (in %), or empty for no minimum.` });
-        return;
-      }
+    const parsedMins = parseMinStatTexts(minTexts);
+    if (!parsedMins.ok) {
+      setStatus({ kind: 'error', message: parsedMins.message });
+      return;
     }
+    const { minStats } = parsedMins;
     const data: SearchData = { character, weapon, roster, echoes: candidates, sonataSets, enemy, resonanceMode };
     const request: OptimizeRequest = {
       costBudget: 12,
@@ -183,7 +167,7 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
             ? { mode: 'twoPlusTwo', setIdA: lockSetA, setIdB: lockSetB }
             : { mode: 'none' },
       objective: { kind: 'rotation-dpr', blocks, buffs, globalBuffIds, crit },
-      ...(Object.keys(minStats).length === 0 ? {} : { minStats }),
+      ...(minStats === undefined ? {} : { minStats }),
       topN: parsedTopN,
     };
     const usedEnemy = { ...enemySettings };
@@ -333,7 +317,7 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
                   <input
                     id={`ropt-min-${stat}`}
                     value={minTexts[stat] ?? ''}
-                    onChange={(e) => setMinTexts((m) => ({ ...m, [stat]: e.target.value }))}
+                    onChange={(e) => setMinTexts({ ...minTexts, [stat]: e.target.value })}
                     inputMode="decimal"
                     className={`${selectClass} mt-0.5`}
                   />

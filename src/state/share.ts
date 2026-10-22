@@ -3,6 +3,7 @@ import { MAIN_STAT_RANGES, SECONDARY_MAIN_STAT_MAX, SUB_STAT_TIERS } from '../da
 import {
   buildSchema,
   SHARED_BUILD_VERSION,
+  SHARED_BUILD_VERSION_SETTINGS,
   sharedBuildSchema,
   type Build,
   type CharacterData,
@@ -16,18 +17,24 @@ import {
   type StatKey,
   type WeaponData,
 } from '../data/schema.ts';
+import { characterResonanceModes, type ResonanceMode } from '../domain/characterMods.ts';
+import type { EnemySettings } from '../domain/enemy.ts';
 import { isBlockStale, type RotationBuff } from '../domain/rotation.ts';
 import { computeAtk, computeDef, computeHp, computeStats } from '../domain/stats.ts';
+import { effectiveMinStats, type MinStats } from '../optimizer/minStats.ts';
 
 /**
  * State layer: shareable build links. Client-side only (no backend); the
  * payload rides in the URL fragment, which browsers never send to a server.
  *
- * v2 (current): `#b=2.<base64url(deflate-raw(JSON SharedBuild))>`. The
- *   `2.` tag sits before the payload, so the version is known before
+ * v2/v3: `#b=<tag>.<base64url(deflate-raw(JSON SharedBuild))>`. The
+ *   `2.`/`3.` tag sits before the payload, so the version is known before
  *   anything is decompressed ('.' is outside the base64url alphabet).
  *   Self-contained: the 5 Echoes' stats, roster context and (opt-in) the
- *   objective spec — see `sharedBuildSchema`.
+ *   objective spec — see `sharedBuildSchema`. v3 adds the run settings
+ *   (enemy, Resonance Mode, minimum stats); the encoder emits v2 when a
+ *   build has none, so plain links still open in older app copies. The tag
+ *   must match the payload's `v`.
  * v1 (legacy, decode only): `#b=<base64url(JSON {v: 1, build})>`; a bare
  *   `Build` whose `echoIds` mean nothing outside the sender's inventory.
  *
@@ -40,13 +47,12 @@ import { computeAtk, computeDef, computeHp, computeStats } from '../domain/stats
 export const BUILD_LINK_VERSION = 1;
 /** Longest `#b=…` hash we decode at all (checked before base64/inflate). */
 export const MAX_SHARE_HASH_LENGTH = 16_384;
-/** Most bytes a v2 payload may inflate to (decompression-bomb guard). */
+/** Most bytes a v2/v3 payload may inflate to (decompression-bomb guard). */
 export const MAX_SHARE_JSON_BYTES = 65_536;
 
-const V2_TAG = `${SHARED_BUILD_VERSION}.`;
 const BASE64URL = /^[A-Za-z0-9_-]*$/;
 
-export type DecodedShareLink = { version: 1; build: Build } | { version: 2; shared: SharedBuild };
+export type DecodedShareLink = { version: 1; build: Build } | { version: 2 | 3; shared: SharedBuild };
 
 /** One readable line for a schema failure (first issue, with its path). */
 function describeZodError(err: ZodError): string {
@@ -134,7 +140,7 @@ export async function inflateRawCapped(bytes: Uint8Array<ArrayBuffer>, cap: numb
   return concat(chunks, total);
 }
 
-/** Validate and encode a v2 payload as a URL hash fragment (caller prefixes the page URL). */
+/** Validate and encode a v2/v3 payload as a URL hash fragment (caller prefixes the page URL). */
 export async function encodeSharedBuild(shared: SharedBuild): Promise<string> {
   const valid = sharedBuildSchema.parse(shared);
   const json = new TextEncoder().encode(JSON.stringify(valid));
@@ -143,7 +149,7 @@ export async function encodeSharedBuild(shared: SharedBuild): Promise<string> {
     throw new Error(`the build is too large to share (${json.byteLength} bytes, limit ${MAX_SHARE_JSON_BYTES}) — try without the rotation`);
   }
   const compressed = await deflateRaw(json);
-  const hash = `#b=${V2_TAG}${toBase64Url(compressed)}`;
+  const hash = `#b=${valid.v}.${toBase64Url(compressed)}`;
   if (hash.length > MAX_SHARE_HASH_LENGTH) {
     throw new Error(
       `the link would be ${hash.length} characters (limit ${MAX_SHARE_HASH_LENGTH})` +
@@ -189,18 +195,22 @@ export async function decodeShareLink(hash: string): Promise<DecodedShareLink> {
   }
   const body = hash.slice(3);
   try {
-    if (body.startsWith(V2_TAG)) {
-      const bytes = await inflateRawCapped(fromBase64Url(body.slice(V2_TAG.length)), MAX_SHARE_JSON_BYTES);
+    const tag = /^(\d+)\./.exec(body);
+    if (tag !== null) {
+      const version = Number(tag[1]);
+      if (version !== SHARED_BUILD_VERSION && version !== SHARED_BUILD_VERSION_SETTINGS) {
+        throw new Error(`unsupported build link version ${tag[1]}`);
+      }
+      const bytes = await inflateRawCapped(fromBase64Url(body.slice(tag[0].length)), MAX_SHARE_JSON_BYTES);
       let json: unknown;
       try {
         json = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
       } catch {
         throw new Error('build link is not valid JSON');
       }
-      return { version: 2, shared: sharedBuildSchema.parse(json) };
-    }
-    if (/^\d+\./.test(body)) {
-      throw new Error(`unsupported build link version ${body.slice(0, body.indexOf('.'))}`);
+      const shared = sharedBuildSchema.parse(json);
+      if (shared.v !== version) throw new Error(`build link tag ${version} doesn't match its payload (v${shared.v})`);
+      return { version: shared.v, shared };
     }
     return { version: 1, build: decodeBuildLink(hash) };
   } catch (err) {
@@ -227,7 +237,25 @@ function sharedEchoFrom(echo: OwnedEcho): SharedEcho {
 }
 
 /**
- * Build a v2 payload from a library build plus the sender's inventory.
+ * The run settings a build carries into a link, each only when present.
+ * `minStats` keeps positive finite entries (`effectiveMinStats`); a
+ * Resonance Mode the character doesn't have counts as unset, as everywhere
+ * else it is read.
+ */
+function runSettingsOf(build: Build): { enemy?: EnemySettings; resonanceMode?: string; minStats?: MinStats } {
+  const minStats = effectiveMinStats(build.minStats);
+  const modeKnown =
+    build.resonanceMode !== undefined &&
+    characterResonanceModes(build.characterId).some((m) => m === build.resonanceMode);
+  return {
+    ...(build.enemy ? { enemy: { kind: build.enemy.kind, level: build.enemy.level, baseRES: build.enemy.baseRES } } : {}),
+    ...(modeKnown ? { resonanceMode: build.resonanceMode } : {}),
+    ...(minStats ? { minStats } : {}),
+  };
+}
+
+/**
+ * Build a v2 payload (v3 when the build carries run settings) from a library build plus the sender's inventory.
  * `build.echoIds` is slot order (slot 1 first). Character/weapon context
  * comes from `build.context` (what the optimizer run used, saved with the
  * build); only older builds without it fall back to the current Roster
@@ -257,8 +285,9 @@ export function sharedBuildFromLibrary(input: {
   }
   const context = build.context ?? rosterFallback(build, roster);
   const echoes = build.echoIds.map((id) => sharedEchoFrom(byId.get(id)!));
+  const settings = runSettingsOf(build);
   const result = sharedBuildSchema.safeParse({
-    v: SHARED_BUILD_VERSION,
+    v: Object.keys(settings).length === 0 ? SHARED_BUILD_VERSION : SHARED_BUILD_VERSION_SETTINGS,
     name: build.name.slice(0, 80),
     ...(build.score === undefined ? {} : { score: build.score }),
     summary: build.objectiveId.slice(0, 120),
@@ -278,6 +307,7 @@ export function sharedBuildFromLibrary(input: {
     },
     echoes,
     ...(objective ? { objective } : {}),
+    ...settings,
   });
   if (!result.success) throw new Error(`this build can't be shared as-is (${describeZodError(result.error)})`);
   return result.data;
@@ -527,15 +557,29 @@ export interface SharedCalculatorDraft {
   };
   /** Rotation blocks dropped because the recipient's kit data doesn't know them. */
   skippedBlocks: number;
+  /** Run settings carried by a v3 link; absent ones leave the Calculator's current values alone. */
+  enemy?: EnemySettings;
+  /** Only a mode this character has (`characterResonanceModes`); anything else counts as unset. */
+  resonanceMode?: ResonanceMode;
+  minStats?: MinStats;
 }
 
 /**
  * Calculator inputs for "Optimize with my Echoes": the shared roster
- * context plus, when carried, the rotation. Stale blocks (motions the
+ * context plus, when carried, the rotation and the run settings (enemy,
+ * Resonance Mode, minimum stats). Stale blocks (motions the
  * recipient's snapshot doesn't have) are dropped and counted, as presets do.
  */
 export function sharedCalculatorDraft(shared: SharedBuild, character: CharacterData): SharedCalculatorDraft {
-  const draft: SharedCalculatorDraft = { sourceName: shared.name, roster: sharedRosterEntry(shared), skippedBlocks: 0 };
+  const mode = characterResonanceModes(character.id).find((m) => m === shared.resonanceMode);
+  const draft: SharedCalculatorDraft = {
+    sourceName: shared.name,
+    roster: sharedRosterEntry(shared),
+    skippedBlocks: 0,
+    ...(shared.enemy ? { enemy: { ...shared.enemy } } : {}),
+    ...(mode ? { resonanceMode: mode } : {}),
+    ...(shared.minStats ? { minStats: { ...shared.minStats } } : {}),
+  };
   const objective: ObjectiveSpec | undefined = shared.objective;
   if (objective?.kind !== 'rotation-dpr') return draft;
   const blocks = objective.blocks.filter((b) => !isBlockStale(character, { ...b, id: 'share-check' }));

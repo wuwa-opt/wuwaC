@@ -284,17 +284,26 @@ interface Build {
 //   Code that resolves library echoIds against the inventory must skip
 //   reference builds (isReferenceBuild).
 // Build.enemy / Build.resonanceMode: the Calculator enemy settings
-//   ({kind, level, baseRES}) and Resonance Mode the run used. Every
+//   (EnemySettings {kind, level, baseRES}, domain/enemy.ts; the zod shape
+//   repeats it and domain/enemy.test.ts keeps the two assignable) and the
+//   Resonance Mode the run used. Every
 //   save-from-a-run path writes them (RotationOptimizer saveBuild,
 //   allocation saveBuilds). resonanceMode is a plain string that consumers
 //   check against characterResonanceModes(id); an unknown one counts as
-//   unset. Neither ever appears in share links.
+//   unset. v3 share links carry them; only a mode the character has counts.
 // Build.minStats: the sheet minimums the run used (OptimizeRequest.minStats,
 //   as sheet fractions: 0.7 = 70% Crit Rate). Energy Regen is the sheet's
 //   bonus, since no base is seeded. RotationOptimizer saveBuild writes it,
 //   allocation drafts copy it, and allocation and the unused-Echo finder
 //   read it, only via optimizer/minStats.ts (effectiveMinStats: positive
-//   finite entries, else absent). Never in share links.
+//   finite entries, else absent). v3 share links carry it (1-8 positive
+//   finite entries, each <= 100 000).
+//   Editable after saving: the Builds page "Edit minimum stats" (own builds
+//   only) calls updateBuild(id, { minStats }), which stores only positive
+//   finite entries (effectiveMinStats), removes the key when none remain
+//   (null clears) and throws on a negative or non-finite entry. The saved
+//   Echoes and score are NOT recomputed. Fields and parsing are shared with
+//   the Calculator (ui/minStatFields.ts).
 // All five fields are optional and unindexed: no Dexie version bump, and
 // backup format v1 is unchanged (new backups are a superset).
 
@@ -529,6 +538,10 @@ interface Team {
   (`ReferenceBuildDetail`) to its saved payload on `SharedBuildCard`
   (`hideTitle`), with `viewSharedBuild` computed only while open. It never
   resolves against the inventory, so nothing is marked missing.
+  An own build's detail also has "Edit minimum stats" (`MinStatsEditor`).
+  Save shows an Undo toast (in memory) that restores the previous
+  `minStats`, absent staying absent, and is skipped with a notice if the
+  build changed since. Reference builds have no editor.
 - UI dynamics: live-feedback primitives in `src/ui/components/feedback.tsx` +
   `src/ui/toasts.ts`, motion hooks in `src/ui/motion.ts` (`useAnimatedNumber`,
   `useReveal` for scroll-in Windows, `useTypewriter` for the mascot bubble), command palette in
@@ -546,12 +559,21 @@ interface Team {
 - **Share links.** A `#b=` link opens Builds and is held as
   `useAppStore.shareLink`, captured at load and on `hashchange`; `syncHash`
   won't overwrite it.
-  - **Format:** v2 links (`#b=2.<base64url(deflate-raw JSON)>`,
-    `state/share.ts`, schema `sharedBuildSchema`) are self-contained. They
-    carry the 5 Echoes' stats (slot 1 first), the character/weapon context
-    (`Build.context`, else the current Roster entry) and, opt-in, the
-    objective. They never carry Echo ids, `equippedTo`, `origin`, labels or
-    notes. v1 links (`#b=<base64url JSON>`) still decode.
+  - **Format:** v2/v3 links (`#b=<tag>.<base64url(deflate-raw JSON)>`,
+    `state/share.ts`, schema `sharedBuildSchema`, `v: 2 | 3`) are
+    self-contained. They carry the 5 Echoes' stats (slot 1 first), the
+    character/weapon context (`Build.context`, else the current Roster
+    entry) and, opt-in, the objective.
+    - A v3 link also carries the run settings the build was optimized with,
+      each only when the build has it: `enemy`, `resonanceMode` (only a mode
+      the character has) and `minStats` (via `effectiveMinStats`, 1–8
+      entries, each ≤ 100 000).
+    - The encoder emits v2 when there are none, so plain links still open
+      in app copies from before v3. A v2 payload must not carry them, and
+      the tag must equal the payload's `v`. A `4.` tag is "unsupported build
+      link version 4".
+    - Links never carry Echo ids, `equippedTo`, `origin`, labels or notes.
+      v1 links (`#b=<base64url JSON>`) still decode.
   - **Untrusted input:** the hash is ≤ 16 384 characters before decoding,
     and the inflated payload ≤ 64 KiB, checked while streaming. The zod
     schema is strict. Values are flagged against `data/echoStats.ts`, never
@@ -560,6 +582,14 @@ interface Team {
     Save as reference, Optimize with my Echoes (a non-persisted Calculator
     draft; the roster is never written) and Dismiss. Each resolves the link
     to `#builds`.
+    - The card lists the run settings when present. Optimize applies the
+      enemy and Resonance Mode when the link carries them; otherwise the
+      Calculator's current values stay.
+    - The Minimum stats boxes (`calculator.minStatTexts`, session-local, set
+      by `BuildsPage` via `minStatTextsFor`) are set from a v3 link and
+      cleared when it has no `minStats`: a v3 link states the sender's
+      minimums, so absent means none. A v2 link leaves them alone.
+    - Save as reference keeps the settings in the stored payload.
 - **Picked-file caps.** Read user-picked JSON only through
   `ui/readFile.ts` `readTextFile`, which checks the size before
   `file.text()`. Backups are capped at 16 MiB and Kamera imports at 8 MiB,

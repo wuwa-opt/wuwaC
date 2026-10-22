@@ -5,6 +5,7 @@ import { echoDisplayName, sonataName } from '../echoDisplay.ts';
 import { formatEnemy, formatMinStats, RESONANCE_MODE_LABELS } from '../format.ts';
 import { sonataTint } from '../sonataTint.ts';
 import { GameIcon } from './GameIcon.tsx';
+import { MinStatsEditor } from './MinStatsEditor.tsx';
 import { StatValue } from './SharedBuildCard.tsx';
 import { CostPips } from './ui.tsx';
 
@@ -61,6 +62,7 @@ export function BuildDetail({
           </div>
         ))}
       </dl>
+      <MinStatsEditor build={build} />
       <ol aria-label="Build Echoes" className="mt-3 space-y-1.5">
         {build.echoIds.map((echoId, slot) => {
           const echo = byId.get(echoId);

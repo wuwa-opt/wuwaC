@@ -10,6 +10,13 @@ import { elementalBoss, standardMob, type EnemyProfile } from './damage.ts';
 
 export type EnemyKind = 'mob' | 'boss';
 
+/** The Calculator's enemy inputs, as saved with a build (`Build.enemy`). */
+export interface EnemySettings {
+  kind: EnemyKind;
+  level: number;
+  baseRES: number;
+}
+
 export const DEFAULT_ENEMY_LEVEL = 90;
 export const DEFAULT_ENEMY_RES = 0.1;
 export const MAX_ENEMY_LEVEL = 120;

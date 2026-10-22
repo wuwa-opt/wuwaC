@@ -10,6 +10,8 @@ import { useLibraryStore, type BuildDraft } from '../../state/library.ts';
 import { useRosterStore } from '../../state/roster.ts';
 import { decodeShareLink, encodeBuildLink, encodeSharedBuild, referenceBuildFrom } from '../../state/share.ts';
 import { useAppStore } from '../../state/store.ts';
+import { ToastHost } from '../components/ToastHost.tsx';
+import { useToastStore } from '../toasts.ts';
 import { BuildsPage } from './BuildsPage.tsx';
 
 const seed: BuildDraft = {
@@ -92,6 +94,7 @@ beforeEach(async () => {
   useRosterStore.setState({ entries: [], loaded: false });
   useCalculatorStore.getState().resetAll();
   useAppStore.setState({ shareLink: null });
+  useToastStore.setState({ toasts: [] });
   window.history.replaceState(null, '', '/');
 });
 
@@ -212,6 +215,141 @@ describe('BuildsPage', () => {
       } finally {
         useInventoryStore.setState({ load: useInventoryStore.getInitialState().load });
       }
+    });
+
+    describe('edit minimum stats', () => {
+      async function openEditor(draft: BuildDraft = detailed) {
+        const user = userEvent.setup();
+        await db.ownedEchoes.bulkAdd(ownEchoes);
+        const saved = await useLibraryStore.getState().saveBuild(draft);
+        render(<><BuildsPage /><ToastHost /></>);
+        await screen.findByText('Seeded Build');
+        await user.click(screen.getByRole('button', { name: /show details for seeded build/i }));
+        await user.click(screen.getByRole('button', { name: 'Edit minimum stats' }));
+        return { user, saved };
+      }
+      const field = (name: RegExp) => screen.getByRole('textbox', { name });
+      const stored = () => useLibraryStore.getState().builds[0];
+
+      it('opens with the saved minimums as % text, the stale-score note and the Energy Regen hint', async () => {
+        await openEditor();
+        expect(field(/Minimum Energy Regen/)).toHaveValue('20');
+        expect(field(/Minimum Crit Rate/)).toHaveValue('60');
+        expect(field(/Minimum Crit DMG/)).toHaveValue('');
+        expect(screen.getByText(/Bonus only/)).toBeInTheDocument();
+        expect(screen.getByText(/aren't recomputed/)).toBeInTheDocument();
+      });
+
+      it('saves edited minimums as sheet fractions, persists them and shows them in the details', async () => {
+        const { user } = await openEditor();
+        await user.clear(field(/Minimum Crit Rate/));
+        await user.type(field(/Minimum Crit Rate/), '70');
+        await user.type(field(/Minimum Crit DMG/), '180.5');
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+
+        await screen.findByText(/Minimum stats updated/);
+        expect(stored().minStats?.energyRegen).toBeCloseTo(0.2, 10);
+        expect(stored().minStats?.critRate).toBeCloseTo(0.7, 10);
+        expect(stored().minStats?.critDmg).toBeCloseTo(1.805, 10);
+        expect((await db.builds.toArray())[0].minStats?.critRate).toBeCloseTo(0.7, 10);
+        expect(screen.queryByRole('form', { name: /edit minimum stats/i })).not.toBeInTheDocument();
+        expect(screen.getByRole('region', { name: /details for seeded build/i })).toHaveTextContent(/Minimum stats\s*Energy Regen ≥ 20%, Crit Rate ≥ 70%, Crit DMG ≥ 180\.5%/);
+      });
+
+      it('clears the key when every box is empty', async () => {
+        const { user } = await openEditor();
+        await user.clear(field(/Minimum Energy Regen/));
+        await user.clear(field(/Minimum Crit Rate/));
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+        await screen.findByText(/Minimum stats updated/);
+        expect('minStats' in stored()).toBe(false);
+        expect('minStats' in (await db.builds.toArray())[0]).toBe(false);
+        expect(screen.getByRole('region', { name: /details for seeded build/i })).not.toHaveTextContent('Minimum stats');
+      });
+
+      it('shows an error and saves nothing for invalid input', async () => {
+        const { user } = await openEditor();
+        await user.clear(field(/Minimum Crit Rate/));
+        await user.type(field(/Minimum Crit Rate/), 'abc');
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent(/Minimum Crit Rate must be a non-negative number/);
+        expect(stored().minStats).toEqual(detailed.minStats);
+
+        await user.clear(field(/Minimum Crit Rate/));
+        await user.type(field(/Minimum Crit Rate/), '-5');
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent(/Crit Rate must be a non-negative number/);
+        expect(stored().minStats).toEqual(detailed.minStats);
+        expect(screen.queryByText(/Minimum stats updated/)).not.toBeInTheDocument();
+      });
+
+      it('Cancel closes the editor without saving, and reopening starts from the saved values', async () => {
+        const { user } = await openEditor();
+        await user.clear(field(/Minimum Energy Regen/));
+        await user.type(field(/Minimum Energy Regen/), '99');
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+        expect(screen.queryByRole('form', { name: /edit minimum stats/i })).not.toBeInTheDocument();
+        expect(stored().minStats).toEqual(detailed.minStats);
+        await user.click(screen.getByRole('button', { name: 'Edit minimum stats' }));
+        expect(field(/Minimum Energy Regen/)).toHaveValue('20');
+      });
+
+      it('Undo restores the previous minimums', async () => {
+        const { user } = await openEditor();
+        await user.clear(field(/Minimum Crit Rate/));
+        await user.type(field(/Minimum Crit Rate/), '75');
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+        await screen.findByText(/Minimum stats updated/);
+        await user.click(screen.getByRole('button', { name: 'Undo' }));
+        await screen.findByText(/Restored the previous minimum stats/);
+        expect(stored().minStats).toEqual(detailed.minStats);
+        expect((await db.builds.toArray())[0].minStats).toEqual(detailed.minStats);
+      });
+
+      it('Undo of a first-time set makes the key absent again', async () => {
+        const { user } = await openEditor({ ...seed });
+        await user.type(field(/Minimum Crit Rate/), '70');
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+        await screen.findByText(/Minimum stats updated/);
+        expect(stored().minStats?.critRate).toBeCloseTo(0.7, 10);
+        await user.click(screen.getByRole('button', { name: 'Undo' }));
+        await screen.findByText(/Restored the previous minimum stats/);
+        expect('minStats' in stored()).toBe(false);
+        expect('minStats' in (await db.builds.toArray())[0]).toBe(false);
+      });
+
+      it('Undo of a clear brings the minimums back', async () => {
+        const { user } = await openEditor();
+        await user.clear(field(/Minimum Energy Regen/));
+        await user.clear(field(/Minimum Crit Rate/));
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+        await screen.findByText(/Minimum stats updated/);
+        await user.click(screen.getByRole('button', { name: 'Undo' }));
+        await screen.findByText(/Restored the previous minimum stats/);
+        expect(stored().minStats).toEqual(detailed.minStats);
+      });
+
+      it('Undo leaves a build alone that was edited again since', async () => {
+        const { user, saved } = await openEditor();
+        await user.clear(field(/Minimum Crit Rate/));
+        await user.type(field(/Minimum Crit Rate/), '75');
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+        await screen.findByText(/Minimum stats updated/);
+        await useLibraryStore.getState().updateBuild(saved.id, { minStats: { critDmg: 2 } });
+        await user.click(screen.getByRole('button', { name: 'Undo' }));
+        await screen.findByText(/changed since, left as is/);
+        expect(stored().minStats).toEqual({ critDmg: 2 });
+      });
+
+      it('is not offered on a reference build', async () => {
+        const user = userEvent.setup();
+        await useLibraryStore.getState().importBuilds([referenceBuildFrom(sharedPayload)]);
+        render(<BuildsPage />);
+        await screen.findByText('Friend Jiyan');
+        await user.click(screen.getByRole('button', { name: /show details for friend jiyan/i }));
+        expect(screen.getByRole('region', { name: /details for friend jiyan/i })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Edit minimum stats' })).not.toBeInTheDocument();
+      });
     });
 
     it('opens a saved reference build to its own five Echoes, with no inventory lookups', async () => {
@@ -403,6 +541,138 @@ describe('BuildsPage', () => {
     });
     expect(await db.roster.get('jiyan')).toEqual(myRoster);
     expect(await db.builds.count()).toBe(0);
+  });
+
+  describe('links that carry run settings (v3)', () => {
+    const v3: SharedBuild = {
+      ...sharedPayload,
+      v: 3,
+      enemy: { kind: 'boss', level: 100, baseRES: 0.2 },
+      minStats: { energyRegen: 0.2, critRate: 0.6 },
+    };
+    const denia: SharedBuild = {
+      ...v3,
+      character: { ...v3.character, id: 'denia' },
+      weapon: { ...v3.weapon, id: 'augment' },
+      resonanceMode: 'tuneStrain',
+    };
+
+    it('previews the enemy, Resonance Mode and minimum stats, and nothing for a plain link', async () => {
+      await openLink(denia);
+      const { unmount } = render(<BuildsPage />);
+      const settings = within(await screen.findByRole('region', { name: 'Shared build' })).getByLabelText('Run settings');
+      expect(settings).toHaveTextContent(/Enemy\s*boss, Lv 100, 20% base RES/);
+      expect(settings).toHaveTextContent(/Resonance Mode\s*Tune Strain/);
+      expect(settings).toHaveTextContent(/Minimum stats\s*Energy Regen ≥ 20%, Crit Rate ≥ 60%/);
+      unmount();
+
+      await openLink(sharedPayload);
+      render(<BuildsPage />);
+      const preview = await screen.findByRole('region', { name: 'Shared build' });
+      await within(preview).findByLabelText('Key stats');
+      expect(within(preview).queryByLabelText('Run settings')).not.toBeInTheDocument();
+    });
+
+    it("ignores a Resonance Mode the character doesn't have", async () => {
+      await openLink({ ...v3, resonanceMode: 'tuneStrain' }); // Jiyan has no modes
+      render(<BuildsPage />);
+      const settings = within(await screen.findByRole('region', { name: 'Shared build' })).getByLabelText('Run settings');
+      expect(settings).not.toHaveTextContent('Resonance Mode');
+      expect(settings).toHaveTextContent('Enemy');
+    });
+
+    it('Optimize with my Echoes applies them to the Calculator draft and prefills the minimums, writing nothing', async () => {
+      const user = userEvent.setup();
+      await db.roster.add(myRoster);
+      await openLink(denia);
+      render(<BuildsPage />);
+      const preview = await screen.findByRole('region', { name: 'Shared build' });
+      await user.click(within(preview).getByRole('button', { name: /optimize with my echoes/i }));
+      expect(useAppStore.getState().activeSection).toBe('calculator');
+      expect(useCalculatorStore.getState()).toMatchObject({
+        characterId: 'denia',
+        enemyKind: 'boss',
+        enemyLevel: 100,
+        enemyBaseRES: 0.2,
+        resonanceMode: 'tuneStrain',
+        rosterSourceId: '',
+        minStatTexts: { energyRegen: '20', critRate: '60' },
+      });
+      expect(await db.roster.get('jiyan')).toEqual(myRoster);
+      expect(await db.roster.count()).toBe(1);
+      expect(await db.builds.count()).toBe(0);
+    });
+
+    it('a v3 link without minimums clears the prefilled boxes, but leaves the enemy alone', async () => {
+      const user = userEvent.setup();
+      useCalculatorStore.getState().setEnemyLevel(77);
+      useCalculatorStore.getState().setMinStatTexts({ critDmg: '200', critRate: '70' });
+      const { minStats: _dropped, ...noMins } = v3;
+      void _dropped;
+      await openLink(noMins);
+      render(<BuildsPage />);
+      const preview = await screen.findByRole('region', { name: 'Shared build' });
+      await user.click(within(preview).getByRole('button', { name: /optimize with my echoes/i }));
+      expect(useCalculatorStore.getState().minStatTexts).toEqual({});
+      // The link's enemy is applied; only the boxes are cleared.
+      expect(useCalculatorStore.getState()).toMatchObject({ enemyLevel: 100, enemyKind: 'boss' });
+    });
+
+    it('a v3 link with minimums replaces whatever the boxes held', async () => {
+      const user = userEvent.setup();
+      useCalculatorStore.getState().setMinStatTexts({ critDmg: '200' });
+      await openLink(v3);
+      render(<BuildsPage />);
+      const preview = await screen.findByRole('region', { name: 'Shared build' });
+      await user.click(within(preview).getByRole('button', { name: /optimize with my echoes/i }));
+      expect(useCalculatorStore.getState().minStatTexts).toEqual({ energyRegen: '20', critRate: '60' });
+    });
+
+    it('a plain (v2) link leaves the Calculator enemy and minimum boxes alone', async () => {
+      const user = userEvent.setup();
+      useCalculatorStore.getState().setEnemyLevel(77);
+      useCalculatorStore.getState().setMinStatTexts({ critDmg: '200' });
+      await openLink(sharedPayload);
+      render(<BuildsPage />);
+      const preview = await screen.findByRole('region', { name: 'Shared build' });
+      await user.click(within(preview).getByRole('button', { name: /optimize with my echoes/i }));
+      expect(useCalculatorStore.getState()).toMatchObject({ enemyLevel: 77, minStatTexts: { critDmg: '200' } });
+    });
+
+    it('Save as reference keeps them, and the reference details show them', async () => {
+      const user = userEvent.setup();
+      await openLink(v3);
+      render(<BuildsPage />);
+      const preview = await screen.findByRole('region', { name: 'Shared build' });
+      await user.click(within(preview).getByRole('button', { name: /save as reference/i }));
+      await screen.findByText(/saved “friend jiyan” as a reference build/i);
+      const [row] = await db.builds.toArray();
+      expect(row.reference).toEqual(v3);
+
+      await user.click(await screen.findByRole('button', { name: /show details for friend jiyan/i }));
+      const region = screen.getByRole('region', { name: /details for friend jiyan/i });
+      expect(region).toHaveTextContent(/Enemy\s*boss, Lv 100, 20% base RES/);
+      expect(region).toHaveTextContent(/Minimum stats\s*Energy Regen ≥ 20%, Crit Rate ≥ 60%/);
+    });
+
+    it('Copy link on an own build with settings produces a v3 link that opens', async () => {
+      const user = userEvent.setup();
+      await db.ownedEchoes.bulkAdd(ownEchoes);
+      await db.roster.add(myRoster);
+      await useLibraryStore.getState().saveBuild({
+        ...seed,
+        enemy: { kind: 'boss', level: 100, baseRES: 0.2 },
+        minStats: { critRate: 0.6 },
+      });
+      let copied = '';
+      vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText: (t: string) => ((copied = t), Promise.resolve()) } });
+      render(<BuildsPage />);
+      await screen.findByText('Seeded Build');
+      await user.click(screen.getByRole('button', { name: /copy link/i }));
+      await vi.waitFor(() => expect(copied).toContain('#b=3.'));
+      const decoded = await decodeShareLink(copied.slice(copied.indexOf('#b=')));
+      expect(decoded).toMatchObject({ version: 3, shared: { enemy: { level: 100 }, minStats: { critRate: 0.6 } } });
+    });
   });
 
   it('previews a shared build from the link and writes nothing until Import', async () => {

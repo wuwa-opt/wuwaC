@@ -1,7 +1,8 @@
 import type { SharedBuild, Snapshot, StatKey } from '../../data/schema.ts';
 import type { EchoValueFlag, SharedBuildView } from '../../state/share.ts';
 import { sonataName } from '../echoDisplay.ts';
-import { formatStatValue, statLabel } from '../format.ts';
+import { characterResonanceModes } from '../../domain/characterMods.ts';
+import { formatEnemy, formatMinStats, formatStatValue, RESONANCE_MODE_LABELS, statLabel } from '../format.ts';
 import { sonataTint } from '../sonataTint.ts';
 import { GameIcon } from './GameIcon.tsx';
 import { Alert, CostPips } from './ui.tsx';
@@ -47,6 +48,13 @@ export function SharedBuildCard({
   const allFlags = view.flags.flat();
   const outOfRange = allFlags.filter((f) => f.severity === 'out-of-range').length;
   const unverified = allFlags.length - outOfRange;
+  // Run settings of a v3 link. A Resonance Mode this character doesn't have counts as unset.
+  const mode = characterResonanceModes(shared.character.id).find((m) => m === shared.resonanceMode);
+  const settings: [string, string][] = [
+    ...(shared.enemy ? [['Enemy', formatEnemy(shared.enemy)] as [string, string]] : []),
+    ...(mode ? [['Resonance Mode', RESONANCE_MODE_LABELS[mode]] as [string, string]] : []),
+    ...(shared.minStats ? [['Minimum stats', formatMinStats(shared.minStats)] as [string, string]] : []),
+  ];
   const flagFor = (slot: number, part: EchoValueFlag['part'], stat: StatKey): EchoValueFlag | undefined =>
     view.flags[slot].find((f) => f.part === part && f.stat === stat);
 
@@ -74,6 +82,17 @@ export function SharedBuildCard({
           </p>
         </div>
       </div>
+
+      {settings.length > 0 && (
+        <dl aria-label="Run settings" className="mt-3 grid grid-cols-1 gap-x-4 gap-y-0.5 text-xs sm:grid-cols-2">
+          {settings.map(([label, value]) => (
+            <div key={label} className="flex gap-2">
+              <dt className="shrink-0 text-fog">{label}</dt>
+              <dd className="min-w-0 font-semibold text-ink tnum">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
 
       {view.issues.length > 0 && (
         <Alert tone="warning" className="mt-3">

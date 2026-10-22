@@ -5,7 +5,7 @@ import { DEFAULT_ENEMY_LEVEL, DEFAULT_ENEMY_RES } from '../domain/enemy.ts';
 import { maxStatusStacks } from '../domain/negativeStatus.ts';
 import type { ActionBlock, RotationBuff } from '../domain/rotation.ts';
 import { blockStartTimes } from '../domain/rotation.ts';
-import { attributeSchema, type RosterEntry } from '../data/schema.ts';
+import { attributeSchema, type RosterEntry, type StatKey } from '../data/schema.ts';
 import type { SharedCalculatorDraft } from './share.ts';
 
 /**
@@ -130,7 +130,19 @@ interface CalculatorState {
    * every other input here, and never touches the roster.
    */
   draftSource: string | null;
-  /** Load a shared build's context as an unsaved draft (Echo slots cleared). */
+  /**
+   * The Calculator's Minimum stats boxes as typed (% text, `''`/absent = no
+   * minimum). Session-local like every other input; the Calculator reads and
+   * writes them, and "Optimize with my Echoes" prefills them from a v3 link.
+   */
+  minStatTexts: Partial<Record<StatKey, string>>;
+  setMinStatTexts: (texts: Partial<Record<StatKey, string>>) => void;
+  /**
+   * Load a shared build's context as an unsaved draft (Echo slots cleared).
+   * Enemy settings and Resonance Mode are applied when the link carries them;
+   * absent ones leave the current values alone. The minimum-stat boxes are
+   * set by the caller (`setMinStatTexts`), which owns the % formatting.
+   */
   loadSharedDraft: (draft: SharedCalculatorDraft) => void;
 }
 
@@ -157,6 +169,8 @@ export const useCalculatorStore = create<CalculatorState>()((set) => ({
   crit: 'expected',
   resonanceMode: null,
   draftSource: null,
+  minStatTexts: {},
+  setMinStatTexts: (texts) => set({ minStatTexts: texts }),
 
   setCharacterId: (id) =>
     set((s) => ({
@@ -402,6 +416,7 @@ export const useCalculatorStore = create<CalculatorState>()((set) => ({
       crit: 'expected',
       resonanceMode: null,
       draftSource: null,
+      minStatTexts: {},
     }),
 
   // Same shape as resetFromRoster, but `rosterSourceId` stays '' (manual):
@@ -431,7 +446,10 @@ export const useCalculatorStore = create<CalculatorState>()((set) => ({
         weaponRank: entry.weaponRank,
         weaponAscension: entry.weaponAscension ?? DEFAULT_WEAPON_ASCENSION,
         forteUnlockedIds: entry.forteUnlockedIds ?? null,
-        resonanceMode: sameCharacter ? s.resonanceMode : null,
+        resonanceMode: draft.resonanceMode ?? (sameCharacter ? s.resonanceMode : null),
+        ...(draft.enemy
+          ? { enemyKind: draft.enemy.kind, enemyLevel: draft.enemy.level, enemyBaseRES: draft.enemy.baseRES }
+          : {}),
         rosterSourceId: '',
         echoIds: [...EMPTY_SLOTS] as EchoSlots,
         draftSource: draft.sourceName,

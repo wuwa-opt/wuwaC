@@ -6,11 +6,12 @@ import { loadBundledSnapshot } from '../../data/index.ts';
 import type { OwnedEcho, RosterEntry } from '../../data/schema.ts';
 import type { ResonanceMode } from '../../domain/characterMods.ts';
 import { standardMob } from '../../domain/damage.ts';
-import type { EnemySettings } from '../../optimizer/allocateMembers.ts';
+import type { EnemySettings } from '../../domain/enemy.ts';
 import { emptySheet } from '../../domain/stats.ts';
 import type { OptimizeRequest, SearchData, SearchResult } from '../../optimizer/search.ts';
 import { runOptimization, type OptimizationHandle } from '../../optimizer/worker.ts';
 import { db } from '../../state/db.ts';
+import { useCalculatorStore } from '../../state/calculator.ts';
 import { useLibraryStore } from '../../state/library.ts';
 import { RotationOptimizer } from './RotationOptimizer.tsx';
 
@@ -95,6 +96,7 @@ const searchedIds = (): string[] => (run.mock.calls[0][0] as SearchData).echoes.
 
 beforeEach(() => {
   run.mockReset();
+  useCalculatorStore.getState().setMinStatTexts({});
 });
 
 describe('RotationOptimizer candidate filters', () => {
@@ -318,6 +320,20 @@ describe('RotationOptimizer minimum stats', () => {
     expect(screen.queryByLabelText(/minimum energy regen/i)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /find best builds/i }));
     expect(requestOf()).not.toHaveProperty('minStats');
+  });
+
+  it('shows boxes prefilled from the store (a shared draft) and searches with them', async () => {
+    const user = userEvent.setup();
+    useCalculatorStore.getState().setMinStatTexts({ energyRegen: '20', critRate: '60' });
+    run.mockReturnValue(fakeHandle().handle);
+    renderOptimizer();
+    expect(screen.getByRole('button', { name: /minimum stats \(2 set\)/i })).toBeInTheDocument();
+    await open(user);
+    expect(screen.getByLabelText(/minimum energy regen/i)).toHaveValue('20');
+    expect(screen.getByLabelText(/minimum crit rate/i)).toHaveValue('60');
+    await user.click(screen.getByRole('button', { name: /find best builds/i }));
+    expect(requestOf().minStats?.energyRegen).toBeCloseTo(0.2, 10);
+    expect(requestOf().minStats?.critRate).toBeCloseTo(0.6, 10);
   });
 
   it('sends typed percentages as sheet fractions (20 -> 0.2) and skips empty or zero boxes', async () => {

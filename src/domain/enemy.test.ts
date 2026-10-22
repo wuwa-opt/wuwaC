@@ -5,9 +5,10 @@ import {
   DEFAULT_ENEMY_RES,
   MAX_ENEMY_LEVEL,
   MAX_ENEMY_RES,
+  type EnemySettings,
 } from './enemy.ts';
 import { computeResMultiplier } from './damage.ts';
-import { buildSchema } from '../data/schema.ts';
+import { buildSchema, type Build } from '../data/schema.ts';
 
 describe('buildEnemyProfile', () => {
   it('exposes documented defaults (Lv90, 10% RES)', () => {
@@ -61,5 +62,16 @@ describe('saved build enemy bounds', () => {
     expect(buildSchema.safeParse(build({ kind: 'mob', level: MAX_ENEMY_LEVEL + 1, baseRES: 0.1 })).success).toBe(false);
     expect(buildSchema.safeParse(build({ kind: 'mob', level: 90, baseRES: MAX_ENEMY_RES + 0.01 })).success).toBe(false);
     expect(buildSchema.safeParse(build({ kind: 'boss', level: 1, baseRES: 0 })).success).toBe(true);
+  });
+});
+
+describe('EnemySettings', () => {
+  it("stays assignable both ways with the data layer's Build.enemy (checked by tsc)", () => {
+    // The data layer can't import the domain, so `buildSchema.enemy` repeats the
+    // shape. These assignments stop compiling if either side drifts.
+    const saved: NonNullable<Build['enemy']> = { kind: 'boss', level: 100, baseRES: 0.2 };
+    const settings: EnemySettings = saved;
+    const back: NonNullable<Build['enemy']> = settings;
+    expect(back).toEqual({ kind: 'boss', level: 100, baseRES: 0.2 });
   });
 });

@@ -1,6 +1,6 @@
 import type { Build, CharacterData, RosterEntry, SonataSetData, WeaponData } from '../data/schema.ts';
 import { characterResonanceModes, type ResonanceMode } from '../domain/characterMods.ts';
-import { buildEnemyProfile, type EnemyKind } from '../domain/enemy.ts';
+import { buildEnemyProfile, type EnemySettings } from '../domain/enemy.ts';
 import type { AllocationMember, AllocationResult } from './allocate.ts';
 import { effectiveMinStats } from './minStats.ts';
 import { pruneInputs } from './prune.ts';
@@ -22,12 +22,6 @@ import { pruneInputs } from './prune.ts';
  * - minimum stats are `build.minStats` (the run's own), for the search and
  *   the baseline alike.
  */
-
-export interface EnemySettings {
-  kind: EnemyKind;
-  level: number;
-  baseRES: number;
-}
 
 export interface MemberInputs {
   characterId: string;

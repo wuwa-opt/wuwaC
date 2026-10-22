@@ -1,13 +1,10 @@
-import { MAX_ENEMY_LEVEL, MAX_ENEMY_RES } from '../../domain/enemy.ts';
+import { MAX_ENEMY_LEVEL, MAX_ENEMY_RES, type EnemySettings } from '../../domain/enemy.ts';
 import { SliderField } from './SliderField.tsx';
 import { inputClass, labelClass } from './classes.ts';
 import { Window } from './ui.tsx';
 
-interface EnemyConfigProps {
-  kind: 'mob' | 'boss';
-  level: number;
-  baseRES: number;
-  onKindChange: (kind: 'mob' | 'boss') => void;
+interface EnemyConfigProps extends EnemySettings {
+  onKindChange: (kind: EnemySettings['kind']) => void;
   onLevelChange: (level: number) => void;
   onRESChange: (res: number) => void;
 }

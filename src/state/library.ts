@@ -1,9 +1,12 @@
 import { create } from 'zustand';
 import { buildSchema, type Build } from '../data/schema.ts';
+import { effectiveMinStats, type MinStats } from '../optimizer/minStats.ts';
 import { db } from './db.ts';
 
 /** Draft for a new build: everything except generated id/timestamp. */
 export type BuildDraft = Omit<Build, 'id' | 'updatedAt'>;
+
+export type BuildPatch = Partial<Pick<Build, 'name' | 'notes'>> & { minStats?: MinStats | null };
 
 interface LibraryState {
   builds: Build[];
@@ -20,7 +23,13 @@ interface LibraryState {
    * (unknown ids ignored). Used to undo `saveBuilds`.
    */
   removeBuilds: (ids: readonly string[]) => Promise<Build[]>;
-  updateBuild: (id: string, patch: Partial<Pick<Build, 'name' | 'notes'>>) => Promise<Build>;
+  /**
+   * Patch a build's name, notes or minimum stats. `minStats` takes sheet
+   * fractions: only positive finite entries are stored (`effectiveMinStats`,
+   * the Calculator's rule), and `null` or nothing left removes the key (never
+   * `{}`). A negative or non-finite entry throws and writes nothing.
+   */
+  updateBuild: (id: string, patch: BuildPatch) => Promise<Build>;
   removeBuild: (id: string) => Promise<void>;
   importBuilds: (json: unknown) => Promise<{ added: number; skipped: number }>;
 }
@@ -75,7 +84,17 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
   updateBuild: async (id, patch) => {
     const existing = get().builds.find((b) => b.id === id);
     if (!existing) throw new Error(`unknown build: ${JSON.stringify(id)}`);
-    const row = buildSchema.parse({ ...existing, ...patch });
+    const { minStats, ...rest } = patch;
+    const candidate: Record<string, unknown> = { ...existing, ...rest };
+    if (minStats !== undefined) {
+      if (minStats !== null && Object.values(minStats).some((v) => !Number.isFinite(v) || v < 0)) {
+        throw new Error('minimum stats must be non-negative numbers');
+      }
+      const next = effectiveMinStats(minStats ?? undefined);
+      if (next === undefined) delete candidate.minStats;
+      else candidate.minStats = next;
+    }
+    const row = buildSchema.parse(candidate);
     await db.builds.put(row);
     set((s) => ({ builds: s.builds.map((b) => (b.id === id ? row : b)) }));
     return row;

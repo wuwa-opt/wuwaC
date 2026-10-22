@@ -6,7 +6,7 @@ import { loadBundledSnapshot } from '../../data/index.ts';
 import type { OwnedEcho, RosterEntry } from '../../data/schema.ts';
 import type { ResonanceMode } from '../../domain/characterMods.ts';
 import { standardMob } from '../../domain/damage.ts';
-import type { EnemySettings } from '../../optimizer/allocateMembers.ts';
+import type { EnemySettings } from '../../domain/enemy.ts';
 import { emptySheet } from '../../domain/stats.ts';
 import type { OptimizeRequest, SearchData, SearchResult } from '../../optimizer/search.ts';
 import { runOptimization, type OptimizationHandle } from '../../optimizer/worker.ts';

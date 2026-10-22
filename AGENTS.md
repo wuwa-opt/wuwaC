@@ -284,7 +284,9 @@ interface Build {
 //   Code that resolves library echoIds against the inventory must skip
 //   reference builds (isReferenceBuild).
 // Build.enemy / Build.resonanceMode: the Calculator enemy settings
-//   ({kind, level, baseRES}) and Resonance Mode the run used. Every
+//   (EnemySettings {kind, level, baseRES}, domain/enemy.ts; the zod shape
+//   repeats it and domain/enemy.test.ts keeps the two assignable) and the
+//   Resonance Mode the run used. Every
 //   save-from-a-run path writes them (RotationOptimizer saveBuild,
 //   allocation saveBuilds). resonanceMode is a plain string that consumers
 //   check against characterResonanceModes(id); an unknown one counts as
@@ -295,6 +297,12 @@ interface Build {
 //   allocation drafts copy it, and allocation and the unused-Echo finder
 //   read it, only via optimizer/minStats.ts (effectiveMinStats: positive
 //   finite entries, else absent). Never in share links.
+//   Editable after saving: the Builds page "Edit minimum stats" (own builds
+//   only) calls updateBuild(id, { minStats }), which stores only positive
+//   finite entries (effectiveMinStats), removes the key when none remain
+//   (null clears) and throws on a negative or non-finite entry. The saved
+//   Echoes and score are NOT recomputed. Fields and parsing are shared with
+//   the Calculator (ui/minStatFields.ts).
 // All five fields are optional and unindexed: no Dexie version bump, and
 // backup format v1 is unchanged (new backups are a superset).
 
@@ -529,6 +537,10 @@ interface Team {
   (`ReferenceBuildDetail`) to its saved payload on `SharedBuildCard`
   (`hideTitle`), with `viewSharedBuild` computed only while open. It never
   resolves against the inventory, so nothing is marked missing.
+  An own build's detail also has "Edit minimum stats" (`MinStatsEditor`).
+  Save shows an Undo toast (in memory) that restores the previous
+  `minStats`, absent staying absent, and is skipped with a notice if the
+  build changed since. Reference builds have no editor.
 - UI dynamics: live-feedback primitives in `src/ui/components/feedback.tsx` +
   `src/ui/toasts.ts`, motion hooks in `src/ui/motion.ts` (`useAnimatedNumber`,
   `useReveal` for scroll-in Windows, `useTypewriter` for the mascot bubble), command palette in

@@ -10,6 +10,8 @@ import { useLibraryStore, type BuildDraft } from '../../state/library.ts';
 import { useRosterStore } from '../../state/roster.ts';
 import { decodeShareLink, encodeBuildLink, encodeSharedBuild, referenceBuildFrom } from '../../state/share.ts';
 import { useAppStore } from '../../state/store.ts';
+import { ToastHost } from '../components/ToastHost.tsx';
+import { useToastStore } from '../toasts.ts';
 import { BuildsPage } from './BuildsPage.tsx';
 
 const seed: BuildDraft = {
@@ -92,6 +94,7 @@ beforeEach(async () => {
   useRosterStore.setState({ entries: [], loaded: false });
   useCalculatorStore.getState().resetAll();
   useAppStore.setState({ shareLink: null });
+  useToastStore.setState({ toasts: [] });
   window.history.replaceState(null, '', '/');
 });
 
@@ -212,6 +215,141 @@ describe('BuildsPage', () => {
       } finally {
         useInventoryStore.setState({ load: useInventoryStore.getInitialState().load });
       }
+    });
+
+    describe('edit minimum stats', () => {
+      async function openEditor(draft: BuildDraft = detailed) {
+        const user = userEvent.setup();
+        await db.ownedEchoes.bulkAdd(ownEchoes);
+        const saved = await useLibraryStore.getState().saveBuild(draft);
+        render(<><BuildsPage /><ToastHost /></>);
+        await screen.findByText('Seeded Build');
+        await user.click(screen.getByRole('button', { name: /show details for seeded build/i }));
+        await user.click(screen.getByRole('button', { name: 'Edit minimum stats' }));
+        return { user, saved };
+      }
+      const field = (name: RegExp) => screen.getByRole('textbox', { name });
+      const stored = () => useLibraryStore.getState().builds[0];
+
+      it('opens with the saved minimums as % text, the stale-score note and the Energy Regen hint', async () => {
+        await openEditor();
+        expect(field(/Minimum Energy Regen/)).toHaveValue('20');
+        expect(field(/Minimum Crit Rate/)).toHaveValue('60');
+        expect(field(/Minimum Crit DMG/)).toHaveValue('');
+        expect(screen.getByText(/Bonus only/)).toBeInTheDocument();
+        expect(screen.getByText(/aren't recomputed/)).toBeInTheDocument();
+      });
+
+      it('saves edited minimums as sheet fractions, persists them and shows them in the details', async () => {
+        const { user } = await openEditor();
+        await user.clear(field(/Minimum Crit Rate/));
+        await user.type(field(/Minimum Crit Rate/), '70');
+        await user.type(field(/Minimum Crit DMG/), '180.5');
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+
+        await screen.findByText(/Minimum stats updated/);
+        expect(stored().minStats?.energyRegen).toBeCloseTo(0.2, 10);
+        expect(stored().minStats?.critRate).toBeCloseTo(0.7, 10);
+        expect(stored().minStats?.critDmg).toBeCloseTo(1.805, 10);
+        expect((await db.builds.toArray())[0].minStats?.critRate).toBeCloseTo(0.7, 10);
+        expect(screen.queryByRole('form', { name: /edit minimum stats/i })).not.toBeInTheDocument();
+        expect(screen.getByRole('region', { name: /details for seeded build/i })).toHaveTextContent(/Minimum stats\s*Energy Regen ≥ 20%, Crit Rate ≥ 70%, Crit DMG ≥ 180\.5%/);
+      });
+
+      it('clears the key when every box is empty', async () => {
+        const { user } = await openEditor();
+        await user.clear(field(/Minimum Energy Regen/));
+        await user.clear(field(/Minimum Crit Rate/));
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+        await screen.findByText(/Minimum stats updated/);
+        expect('minStats' in stored()).toBe(false);
+        expect('minStats' in (await db.builds.toArray())[0]).toBe(false);
+        expect(screen.getByRole('region', { name: /details for seeded build/i })).not.toHaveTextContent('Minimum stats');
+      });
+
+      it('shows an error and saves nothing for invalid input', async () => {
+        const { user } = await openEditor();
+        await user.clear(field(/Minimum Crit Rate/));
+        await user.type(field(/Minimum Crit Rate/), 'abc');
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent(/Minimum Crit Rate must be a non-negative number/);
+        expect(stored().minStats).toEqual(detailed.minStats);
+
+        await user.clear(field(/Minimum Crit Rate/));
+        await user.type(field(/Minimum Crit Rate/), '-5');
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent(/Crit Rate must be a non-negative number/);
+        expect(stored().minStats).toEqual(detailed.minStats);
+        expect(screen.queryByText(/Minimum stats updated/)).not.toBeInTheDocument();
+      });
+
+      it('Cancel closes the editor without saving, and reopening starts from the saved values', async () => {
+        const { user } = await openEditor();
+        await user.clear(field(/Minimum Energy Regen/));
+        await user.type(field(/Minimum Energy Regen/), '99');
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+        expect(screen.queryByRole('form', { name: /edit minimum stats/i })).not.toBeInTheDocument();
+        expect(stored().minStats).toEqual(detailed.minStats);
+        await user.click(screen.getByRole('button', { name: 'Edit minimum stats' }));
+        expect(field(/Minimum Energy Regen/)).toHaveValue('20');
+      });
+
+      it('Undo restores the previous minimums', async () => {
+        const { user } = await openEditor();
+        await user.clear(field(/Minimum Crit Rate/));
+        await user.type(field(/Minimum Crit Rate/), '75');
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+        await screen.findByText(/Minimum stats updated/);
+        await user.click(screen.getByRole('button', { name: 'Undo' }));
+        await screen.findByText(/Restored the previous minimum stats/);
+        expect(stored().minStats).toEqual(detailed.minStats);
+        expect((await db.builds.toArray())[0].minStats).toEqual(detailed.minStats);
+      });
+
+      it('Undo of a first-time set makes the key absent again', async () => {
+        const { user } = await openEditor({ ...seed });
+        await user.type(field(/Minimum Crit Rate/), '70');
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+        await screen.findByText(/Minimum stats updated/);
+        expect(stored().minStats?.critRate).toBeCloseTo(0.7, 10);
+        await user.click(screen.getByRole('button', { name: 'Undo' }));
+        await screen.findByText(/Restored the previous minimum stats/);
+        expect('minStats' in stored()).toBe(false);
+        expect('minStats' in (await db.builds.toArray())[0]).toBe(false);
+      });
+
+      it('Undo of a clear brings the minimums back', async () => {
+        const { user } = await openEditor();
+        await user.clear(field(/Minimum Energy Regen/));
+        await user.clear(field(/Minimum Crit Rate/));
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+        await screen.findByText(/Minimum stats updated/);
+        await user.click(screen.getByRole('button', { name: 'Undo' }));
+        await screen.findByText(/Restored the previous minimum stats/);
+        expect(stored().minStats).toEqual(detailed.minStats);
+      });
+
+      it('Undo leaves a build alone that was edited again since', async () => {
+        const { user, saved } = await openEditor();
+        await user.clear(field(/Minimum Crit Rate/));
+        await user.type(field(/Minimum Crit Rate/), '75');
+        await user.click(screen.getByRole('button', { name: 'Save minimum stats' }));
+        await screen.findByText(/Minimum stats updated/);
+        await useLibraryStore.getState().updateBuild(saved.id, { minStats: { critDmg: 2 } });
+        await user.click(screen.getByRole('button', { name: 'Undo' }));
+        await screen.findByText(/changed since, left as is/);
+        expect(stored().minStats).toEqual({ critDmg: 2 });
+      });
+
+      it('is not offered on a reference build', async () => {
+        const user = userEvent.setup();
+        await useLibraryStore.getState().importBuilds([referenceBuildFrom(sharedPayload)]);
+        render(<BuildsPage />);
+        await screen.findByText('Friend Jiyan');
+        await user.click(screen.getByRole('button', { name: /show details for friend jiyan/i }));
+        expect(screen.getByRole('region', { name: /details for friend jiyan/i })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Edit minimum stats' })).not.toBeInTheDocument();
+      });
     });
 
     it('opens a saved reference build to its own five Echoes, with no inventory lookups', async () => {

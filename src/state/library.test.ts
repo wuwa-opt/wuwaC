@@ -5,6 +5,8 @@ import { serializeBuilds, useLibraryStore } from './library.ts';
 import type { Build, SharedBuild } from '../data/schema.ts';
 import { BACKUP_FORMAT, BACKUP_VERSION, parseBackup } from './backup.ts';
 import { referenceBuildFrom } from './share.ts';
+import { loadBundledSnapshot } from '../data/index.ts';
+import { findUnusedEchoes } from '../optimizer/unused.ts';
 
 type Draft = Omit<Build, 'id' | 'updatedAt'>;
 
@@ -61,6 +63,100 @@ describe('library store', () => {
     expect(updated.name).toBe('Renamed');
     expect(updated.notes).toBe('hello');
     expect(await db.builds.get(saved.id)).toMatchObject({ name: 'Renamed', notes: 'hello' });
+  });
+
+  describe('updateBuild minStats', () => {
+    const update = (id: string, minStats: Parameters<ReturnType<typeof useLibraryStore.getState>['updateBuild']>[1]['minStats']) =>
+      useLibraryStore.getState().updateBuild(id, { minStats });
+    const persisted = async (id: string) => (await db.builds.get(id))!;
+
+    it('sets, changes, and clears one minimum at a time', async () => {
+      const saved = await useLibraryStore.getState().saveBuild(draft);
+      expect('minStats' in saved).toBe(false);
+
+      const set = await update(saved.id, { energyRegen: 0.2 });
+      expect(set.minStats).toEqual({ energyRegen: 0.2 });
+      expect((await persisted(saved.id)).minStats).toEqual({ energyRegen: 0.2 });
+      expect(useLibraryStore.getState().builds[0].minStats).toEqual({ energyRegen: 0.2 });
+
+      const changed = await update(saved.id, { energyRegen: 0.25, critRate: 0.7 });
+      expect(changed.minStats).toEqual({ energyRegen: 0.25, critRate: 0.7 });
+
+      const one = await update(saved.id, { critRate: 0.7 });
+      expect(one.minStats).toEqual({ critRate: 0.7 });
+      expect((await persisted(saved.id)).minStats).toEqual({ critRate: 0.7 });
+      // The rest of the row is untouched, and the row is still schema-valid.
+      expect(one).toMatchObject({ name: draft.name, score: draft.score, echoIds: draft.echoIds });
+      expect(() => serializeBuilds(useLibraryStore.getState().builds)).not.toThrow();
+    });
+
+    it('clearing everything removes the key (never {}), for null, {} and all-zero input', async () => {
+      const saved = await useLibraryStore.getState().saveBuild({ ...draft, minStats: { critRate: 0.7, critDmg: 1.8 } });
+      for (const empty of [null, {}, { critRate: 0, critDmg: 0 }] as const) {
+        await update(saved.id, { critRate: 0.7 });
+        const cleared = await update(saved.id, empty);
+        expect('minStats' in cleared).toBe(false);
+        expect('minStats' in useLibraryStore.getState().builds[0]).toBe(false);
+        expect('minStats' in (await persisted(saved.id))).toBe(false);
+      }
+    });
+
+    it('stores only positive finite entries', async () => {
+      const saved = await useLibraryStore.getState().saveBuild(draft);
+      const row = await update(saved.id, { energyRegen: 0, critRate: 0.7 });
+      expect(row.minStats).toEqual({ critRate: 0.7 });
+    });
+
+    it('leaves minStats alone when the patch does not mention it', async () => {
+      const saved = await useLibraryStore.getState().saveBuild({ ...draft, minStats: { critRate: 0.7 } });
+      const renamed = await useLibraryStore.getState().updateBuild(saved.id, { name: 'Renamed' });
+      expect(renamed.minStats).toEqual({ critRate: 0.7 });
+    });
+
+    it('rejects invalid input and writes nothing', async () => {
+      const saved = await useLibraryStore.getState().saveBuild({ ...draft, minStats: { critRate: 0.7 } });
+      await expect(update(saved.id, { critRate: -0.1 })).rejects.toThrow();
+      await expect(update(saved.id, { critRate: Number.NaN })).rejects.toThrow();
+      await expect(update(saved.id, { critRate: Infinity })).rejects.toThrow();
+      await expect(update(saved.id, { notAStat: 0.5 } as never)).rejects.toThrow();
+      await expect(update('missing', { critRate: 0.7 })).rejects.toThrow(/unknown build/);
+      expect(useLibraryStore.getState().builds[0].minStats).toEqual({ critRate: 0.7 });
+      expect((await persisted(saved.id)).minStats).toEqual({ critRate: 0.7 });
+    });
+
+    it('a newly set minimum makes the unused-Echo finder keep an Echo it called fodder', async () => {
+      const characters = loadBundledSnapshot().characters;
+      const mk = (id: string, cost: 1 | 3 | 4, stats: Record<string, number>) => ({
+        id,
+        label: id,
+        echoDefId: `${id}-def`,
+        sonataId: 'sierra-gale',
+        cost,
+        level: 25,
+        rarity: 5 as const,
+        mainStat: { stat: 'atk' as const, value: 0 },
+        substats: Object.entries(stats).map(([stat, value]) => ({ stat: stat as 'atk', value })),
+        equippedTo: null,
+        origin: 'manual' as const,
+      });
+      const fillers = Array.from({ length: 4 }, (_, i) => mk(`f${i}`, 1, {}));
+      const echoes = [mk('strong1', 4, { atk: 100 }), mk('strong2', 4, { atk: 90 }), mk('regen', 4, { atk: 10, energyRegen: 0.2 }), ...fillers];
+      const saved = await useLibraryStore.getState().saveBuild({
+        ...draft,
+        characterId: 'jiyan',
+        echoIds: ['strong1', 'f0', 'f1', 'f2', 'f3'],
+        objectiveId: 'max-stat',
+        objective: { kind: 'max-stat', stat: 'atk' },
+      });
+      const verdict = () => findUnusedEchoes({ echoes, builds: useLibraryStore.getState().builds, characters }).get('regen');
+      expect(verdict()).toMatchObject({ status: 'fodder' });
+
+      await update(saved.id, { energyRegen: 0.2 });
+      expect(verdict()).toMatchObject({ status: 'unused', reason: 'kept', keptBy: saved.id });
+
+      await update(saved.id, null);
+      expect(verdict()).toMatchObject({ status: 'fodder' });
+    });
   });
 
   it('updateBuild throws for unknown ids and blank names', async () => {

@@ -1,5 +1,6 @@
 import type { Attribute, DamageType, StatKey } from '../data/schema.ts';
 import type { ResonanceMode } from '../domain/characterMods.ts';
+import type { EnemySettings } from '../domain/enemy.ts';
 
 /**
  * UI-layer number formatting. Ratios are stored as decimals but typed as
@@ -66,7 +67,7 @@ const ATTRIBUTE_LABELS: Record<Attribute, string> = {
 };
 
 /** "mob, Lv 90, 10% base RES" for a saved enemy (Calculator settings). */
-export function formatEnemy(e: { kind: string; level: number; baseRES: number }): string {
+export function formatEnemy(e: EnemySettings): string {
   return `${e.kind === 'boss' ? 'boss' : 'mob'}, Lv ${e.level}, ${Math.round(e.baseRES * 100)}% base RES`;
 }
 

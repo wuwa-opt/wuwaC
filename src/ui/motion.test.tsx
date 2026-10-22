@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { useAnimatedNumber, usePrefersReducedMotion, useReveal, useTypewriter } from './motion.ts';
+import { formatElapsed, useAnimatedNumber, useElapsedSeconds, usePrefersReducedMotion, useReveal, useTypewriter } from './motion.ts';
 
 function mockMatchMedia(matches: boolean): void {
   window.matchMedia = vi.fn().mockReturnValue({
@@ -121,5 +121,35 @@ describe('useTypewriter', () => {
     mockMatchMedia(true);
     const { result } = renderHook(() => useTypewriter('Hello'));
     expect(result.current).toBe('Hello');
+  });
+});
+
+describe('formatElapsed', () => {
+  it('formats m:ss, then h:mm:ss past an hour', () => {
+    expect(formatElapsed(0)).toBe('0:00');
+    expect(formatElapsed(9)).toBe('0:09');
+    expect(formatElapsed(83)).toBe('1:23');
+    expect(formatElapsed(600)).toBe('10:00');
+    expect(formatElapsed(3723)).toBe('1:02:03');
+    expect(formatElapsed(-4)).toBe('0:00');
+  });
+});
+
+describe('useElapsedSeconds', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('counts whole seconds from mount and clears its interval on unmount', () => {
+    vi.useFakeTimers();
+    const { result, unmount } = renderHook(() => useElapsedSeconds());
+    expect(result.current).toBe(0);
+    act(() => {
+      vi.advanceTimersByTime(3_400);
+    });
+    expect(result.current).toBe(3);
+    expect(vi.getTimerCount()).toBe(1);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

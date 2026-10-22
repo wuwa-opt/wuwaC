@@ -22,6 +22,7 @@ import { useTeamStore } from '../../state/teamStore.ts';
 import { echoDisplayName } from '../echoDisplay.ts';
 import { formatEnemy, formatMinStats, RESONANCE_MODE_LABELS } from '../format.ts';
 import { btnGhost, btnOutline, btnPrimary, labelClass, selectClass } from './classes.ts';
+import { RunClock } from './feedback.tsx';
 import { MarkEquipped, type MarkedEquipped } from './MarkEquipped.tsx';
 import { Alert } from './ui.tsx';
 
@@ -351,11 +352,20 @@ export function TeamAllocation({
       {ready && echoes.length < 5 && <p className="text-xs text-fog">You need at least 5 Echoes in your inventory.</p>}
 
       {running && (
-        <p role="status" className="text-xs text-accent-text tnum">
-          {progress === null
-            ? 'Starting…'
-            : `${progress.phase === 'baseline' ? 'Scoring equipped Echoes' : 'Searching'}: ${characterName(progress.characterId)} (${progress.index + 1} of ${progress.count}) — ${percent}%`}
-        </p>
+        <div className="space-y-1 text-xs text-accent-text">
+          {/* Calm live region: it changes per step, not per percent. */}
+          <p role="status" className="sr-only">
+            {progress === null
+              ? 'Starting the allocation.'
+              : `${progress.phase === 'baseline' ? 'Scoring equipped Echoes' : 'Searching'}: ${characterName(progress.characterId)} (${progress.index + 1} of ${progress.count}).`}
+          </p>
+          <RunClock />
+          <p aria-hidden="true" className="tnum">
+            {progress === null
+              ? 'Starting…'
+              : `${progress.phase === 'baseline' ? 'Scoring equipped Echoes' : 'Searching'}: ${characterName(progress.characterId)} (${progress.index + 1} of ${progress.count}) — ${percent}%`}
+          </p>
+        </div>
       )}
       {status.kind === 'error' && <Alert tone="danger">{status.message}</Alert>}
 

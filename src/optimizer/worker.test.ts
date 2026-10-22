@@ -47,6 +47,29 @@ describe('createProgressTracker', () => {
     expect(onProgress).toHaveBeenLastCalledWith(10, 10);
   });
 
+  it('announces the opening report(0) once, so the page learns the total at once', () => {
+    const onProgress = vi.fn();
+    const tracker = createProgressTracker(10_000_000, onProgress, 50_000);
+    tracker.report(0);
+    expect(onProgress).toHaveBeenCalledTimes(1);
+    expect(onProgress).toHaveBeenLastCalledWith(0, 10_000_000);
+    tracker.report(0);
+    tracker.report(49_999);
+    expect(onProgress).toHaveBeenCalledTimes(1);
+    tracker.report(50_000);
+    expect(onProgress).toHaveBeenCalledTimes(2);
+    expect(onProgress).toHaveBeenLastCalledWith(50_000, 10_000_000);
+    tracker.report(0); // never repeats, and never moves the throttle
+    tracker.flush();
+    expect(onProgress).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not announce a report that starts above zero (behaviour unchanged)', () => {
+    const onProgress = vi.fn();
+    createProgressTracker(10, onProgress, 4).report(1);
+    expect(onProgress).not.toHaveBeenCalled();
+  });
+
   it('sizes steps for about 200 updates, never below 1000 combos', () => {
     expect(progressStep(45)).toBe(1000);
     expect(progressStep(200_000)).toBe(1000);

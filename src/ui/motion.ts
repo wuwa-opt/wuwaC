@@ -113,3 +113,29 @@ export function useTypewriter(text: string, tickMs = 22, charsPerTick = 2): stri
   }, [text, tickMs, charsPerTick, canAnimate]);
   return canAnimate ? text.slice(0, shown) : text;
 }
+
+/**
+ * Whole seconds since the calling component mounted, ticking once a second.
+ * A main-thread timer: a busy worker can't send a heartbeat. Mount the
+ * component only while the run lasts, and the interval is cleared when it
+ * ends, errors, is cancelled or the page unmounts. Wall-clock based, so a
+ * throttled background tab still shows the right time when it wakes.
+ */
+export function useElapsedSeconds(): number {
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    const start = Date.now();
+    const id = setInterval(() => setSeconds(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return seconds;
+}
+
+/** "1:23", or "1:02:03" past an hour. */
+export function formatElapsed(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const seconds = String(s % 60).padStart(2, '0');
+  const minutes = Math.floor(s / 60) % 60;
+  const hours = Math.floor(s / 3600);
+  return hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${seconds}` : `${minutes}:${seconds}`;
+}

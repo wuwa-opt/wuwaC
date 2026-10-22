@@ -77,7 +77,10 @@ export interface ProgressTracker {
  * Throttled progress reporter: `onProgress` fires when the evaluated count
  * crosses into a new `step` multiple (the search can jump by whole skipped
  * subtrees, so counts rarely land on a multiple), plus on `flush()` for
- * the tail. Deterministic (no wall clock) — trivially unit-testable.
+ * the tail. The search's opening `report(0)` fires once too, so the page
+ * learns `total` as soon as setup is done instead of after the first step
+ * (a huge search can take minutes to cover `total / 200` combos).
+ * Deterministic (no wall clock) — trivially unit-testable.
  */
 export function createProgressTracker(
   total: number,
@@ -87,9 +90,17 @@ export function createProgressTracker(
   if (!Number.isInteger(step) || step < 1) throw new Error(`step must be >= 1, got ${step}`);
   let fired = 0;
   let last = 0;
+  let announced = false;
   return {
     report: (evaluated: number) => {
       last = evaluated;
+      if (evaluated === 0) {
+        if (!announced) {
+          announced = true;
+          onProgress(0, total);
+        }
+        return;
+      }
       if (Math.floor(evaluated / step) > Math.floor(fired / step)) {
         fired = evaluated;
         onProgress(evaluated, total);

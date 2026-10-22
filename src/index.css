@@ -498,6 +498,11 @@ details[open] > summary::before {
   50%, 100% { opacity: 0; }
 }
 
+@keyframes px-chase {
+  0%, 37% { opacity: 1; }
+  38%, 100% { opacity: 0.25; }
+}
+
 @keyframes tt-toast-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
@@ -525,6 +530,12 @@ details[open] > summary::before {
     transform-origin: center bottom;
     animation: px-fill 220ms steps(3, jump-end) backwards;
     animation-delay: calc(var(--i, 0) * 35ms);
+  }
+
+  /* Run activity: a lit window of three blocks chases across (set --i). */
+  .px-activity {
+    animation: px-chase 1200ms steps(1, end) infinite;
+    animation-delay: calc((var(--i, 0) - 8) * 150ms);
   }
 
   /* List rows rise in with a short stagger (set --i, capped by the caller). */
@@ -562,6 +573,10 @@ details[open] > summary::before {
   }
   .row-sweep:hover { background-size: 100% 2px; }
 }
+
+/* Run activity blocks at rest (reduced motion): the first three stay lit. */
+.px-activity { opacity: 0.25; }
+.px-activity:nth-child(-n + 3) { opacity: 1; }
 
 /* Small square tag (sonata sets, attribute tags). */
 .px-tag {

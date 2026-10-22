@@ -184,7 +184,10 @@ UI (React components)
   - **Workers:** it runs in `defaultConcurrency` Web Workers as
     deterministic shards (`SearchShard`), merged by `mergeShardResults`.
     Domain math stays in `src/domain`; the optimizer only adds and compares
-    vectors `computeStats` produced.
+    vectors `computeStats` produced. The progress tracker
+    (`createProgressTracker`, `protocol.ts`) fires the search's opening
+    `report(0)` once, so the page learns `total` right after setup, not
+    after the first step.
   - **Pruning:** dominance pruning (`optimizer/prune.ts`) must never change
     the top-N result.
     - An Echo is dropped only with ≥ k + topN − 1 counted same-cost,
@@ -203,6 +206,11 @@ UI (React components)
     scores higher. The engine still accepts `OptimizeRequest.costBudget:
     10 | 12` (the game caps at 10 before Data Bank upgrades, reference doc
     §2), and its tests cover both.
+  - **Sonata lock tip:** the Calculator tells users with ≥ 100 candidate
+    Echoes and no 5-piece lock that a 5-piece lock is many times faster
+    (measured 11–25x on the bench's realistic inventory at n = 120–240;
+    2+2 only ~1.4–1.7x). No numbers in the UI. Re-measure if the search
+    changes.
 
     One dominator is unsound: several same-cost Echoes share a combo, and
     duplicate defs don't add Sonata pieces.
@@ -519,6 +527,13 @@ interface Team {
   `src/ui/components/SuggestInput.tsx`. All keyframes
   live in the Motion section of `src/index.css` (reduced-motion safe);
   section routing (`#section`) lives in `src/state/store.ts`.
+  - **Long runs:** `RunClock` (`feedback.tsx`, with `useElapsedSeconds` in
+    `motion.ts`) shows the pixel activity blocks and "Running for m:ss" in
+    the Calculator and Team allocation. It is `aria-hidden`; the live
+    region changes only per phase or per quarter checked. Mount it only
+    while the run lasts, since unmounting stops its timer. The Calculator
+    says "Preparing the search…" until `total` is known, and never shows an
+    ETA (progress isn't linear).
 - **Share links.** A `#b=` link opens Builds and is held as
   `useAppStore.shareLink`, captured at load and on `hashchange`; `syncHash`
   won't overwrite it.

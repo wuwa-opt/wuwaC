@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadBundledSnapshot } from '../../data/index.ts';
 import type { OwnedEcho, RosterEntry } from '../../data/schema.ts';
 import type { ResonanceMode } from '../../domain/characterMods.ts';
@@ -67,14 +67,14 @@ function fakeHandle() {
 
 function renderOptimizer(
   context: RosterEntry = roster,
-  over: { enemySettings?: EnemySettings; resonanceMode?: ResonanceMode } = {},
+  over: { enemySettings?: EnemySettings; resonanceMode?: ResonanceMode; echoes?: OwnedEcho[] } = {},
 ) {
   return render(
     <RotationOptimizer
       character={jiyan}
       weapon={verdant}
       roster={context}
-      echoes={echoes}
+      echoes={over.echoes ?? echoes}
       sonataSets={snapshot.sonataSets}
       enemy={standardMob(90)}
       enemySettings={over.enemySettings ?? { kind: 'mob', level: 90, baseRES: 0.1 }}
@@ -137,7 +137,46 @@ describe('RotationOptimizer candidate filters', () => {
   });
 });
 
+describe('RotationOptimizer Sonata lock tip', () => {
+  const many = (n: number): OwnedEcho[] => Array.from({ length: n }, (_, i) => echo(`m${i}`, 25, null));
+  const tip = /a 5-piece Sonata lock makes the search many times faster/i;
+
+  it('shows for a large pool with no lock, and stays out of the way for a small one', () => {
+    const small = renderOptimizer(roster, { echoes: many(99) });
+    expect(screen.queryByText(tip)).not.toBeInTheDocument();
+    small.unmount();
+    renderOptimizer(roster, { echoes: many(100) });
+    expect(screen.getByText(tip)).toBeInTheDocument();
+    expect(screen.getByText(/2\+2 lock helps much less/)).toBeInTheDocument();
+  });
+
+  it('is gone once a 5-piece lock is chosen, and stays for 2+2', async () => {
+    const user = userEvent.setup();
+    renderOptimizer(roster, { echoes: many(150) });
+    await user.selectOptions(screen.getByLabelText('Sonata lock'), 'five');
+    expect(screen.queryByText(tip)).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Sonata lock'), 'twoPlusTwo');
+    expect(screen.getByText(tip)).toBeInTheDocument();
+  });
+
+  it('counts the pool being searched, not the whole inventory', async () => {
+    const user = userEvent.setup();
+    renderOptimizer(roster, { echoes: [...many(60), ...Array.from({ length: 60 }, (_, i) => echo(`w${i}`, 25, 'verina'))] });
+    expect(screen.getByText(tip)).toBeInTheDocument(); // 120 candidates
+    await user.click(screen.getByLabelText(/skip echoes equipped on other characters/i));
+    expect(screen.queryByText(tip)).not.toBeInTheDocument(); // 60 left
+  });
+});
+
 describe('RotationOptimizer progress', () => {
+  const resolved: SearchResult = {
+    builds: [{ echoIds: ['a', 'b', 'e', 'f', 'g'], score: 1000, sheet: emptySheet(), warnings: [], appliedAssumptions: [] }],
+    evaluated: 5000,
+    scored: 120,
+    total: 5000,
+    prunedEchoes: [],
+  };
+
   it('shows covered-of-total progress, then the checked and scored counts', async () => {
     const user = userEvent.setup();
     const fake = fakeHandle();
@@ -145,18 +184,115 @@ describe('RotationOptimizer progress', () => {
     renderOptimizer();
     await user.click(screen.getByRole('button', { name: /find best builds/i }));
     act(() => fake.progress(1234, 5000));
-    expect(screen.getByRole('status')).toHaveTextContent('Checked 1,234 of 5,000 combos…');
+    expect(screen.getByText('Checked 1,234 of 5,000 combos (24%)…')).toBeInTheDocument();
+    expect(screen.getByText(/the count can jump: whole groups of combos are ruled out at once/i)).toBeInTheDocument();
     await act(async () => {
-      fake.resolve({
-        builds: [{ echoIds: ['a', 'b', 'e', 'f', 'g'], score: 1000, sheet: emptySheet(), warnings: [], appliedAssumptions: [] }],
-        evaluated: 5000,
-        scored: 120,
-        total: 5000,
-        prunedEchoes: [],
-      });
+      fake.resolve(resolved);
       await fake.handle.promise;
     });
     expect(screen.getByText(/Checked 5,000 combos \(120 scored in full\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/Running for/)).not.toBeInTheDocument();
+  });
+
+  describe('while running', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('says it is preparing until the first progress arrives, never "0 of 0"', async () => {
+      const fake = fakeHandle();
+      run.mockReturnValue(fake.handle);
+      renderOptimizer();
+      fireEvent.click(screen.getByRole('button', { name: /find best builds/i }));
+      expect(screen.getByText('Preparing the search…')).toBeInTheDocument();
+      expect(screen.queryByText(/0 of 0/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/the count can jump/i)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+      act(() => fake.progress(0, 9_000_000));
+      expect(screen.getByText('Checked 0 of 9,000,000 combos (0%)…')).toBeInTheDocument();
+      expect(screen.queryByText('Preparing the search…')).not.toBeInTheDocument();
+    });
+
+    it('counts the elapsed time up even when the count does not move', () => {
+      vi.useFakeTimers();
+      const fake = fakeHandle();
+      run.mockReturnValue(fake.handle);
+      renderOptimizer();
+      fireEvent.click(screen.getByRole('button', { name: /find best builds/i }));
+      expect(screen.getByText('Running for 0:00')).toBeInTheDocument();
+      act(() => fake.progress(0, 9_000_000));
+      act(() => {
+        vi.advanceTimersByTime(83_000);
+      });
+      expect(screen.getByText('Running for 1:23')).toBeInTheDocument();
+      expect(screen.getByText('Checked 0 of 9,000,000 combos (0%)…')).toBeInTheDocument();
+    });
+
+    it('keeps the live region calm: it changes by quarters, not on every count', () => {
+      const fake = fakeHandle();
+      run.mockReturnValue(fake.handle);
+      renderOptimizer();
+      fireEvent.click(screen.getByRole('button', { name: /find best builds/i }));
+      const live = screen.getByRole('status');
+      expect(live).toHaveTextContent('Preparing the search.');
+      act(() => fake.progress(10, 1000));
+      const started = live.textContent;
+      expect(started).toBe('Search running, 0% or more checked.');
+      act(() => fake.progress(240, 1000));
+      expect(live.textContent).toBe(started);
+      act(() => fake.progress(260, 1000));
+      expect(live.textContent).toBe('Search running, 25% or more checked.');
+      // The ticking text is not in the live region and is hidden from assistive tech.
+      expect(screen.getByText(/Running for/).closest('[aria-hidden="true"]')).not.toBeNull();
+    });
+
+    it('stops the timer when the run finishes', async () => {
+      vi.useFakeTimers();
+      const fake = fakeHandle();
+      run.mockReturnValue(fake.handle);
+      renderOptimizer();
+      fireEvent.click(screen.getByRole('button', { name: /find best builds/i }));
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      await act(async () => {
+        fake.resolve(resolved);
+        await fake.handle.promise;
+      });
+      expect(screen.queryByText(/Running for/)).not.toBeInTheDocument();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('stops the timer on Cancel, and on unmount', () => {
+      vi.useFakeTimers();
+      run.mockReturnValue(fakeHandle().handle);
+      const view = renderOptimizer();
+      fireEvent.click(screen.getByRole('button', { name: /find best builds/i }));
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByText(/Running for/)).not.toBeInTheDocument();
+      expect(vi.getTimerCount()).toBe(0);
+
+      fireEvent.click(screen.getByRole('button', { name: /find best builds/i }));
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      view.unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('stops the timer when the run errors', async () => {
+      vi.useFakeTimers();
+      run.mockReturnValue({
+        promise: Promise.reject(new Error('boom')),
+        cancel: vi.fn(),
+        onProgress: () => undefined,
+      } satisfies OptimizationHandle);
+      renderOptimizer();
+      fireEvent.click(screen.getByRole('button', { name: /find best builds/i }));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getByText('boom')).toBeInTheDocument();
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 });
 

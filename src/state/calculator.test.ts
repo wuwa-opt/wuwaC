@@ -419,6 +419,46 @@ describe('loadSharedDraft', () => {
     expect(after.crit).toBe('crit');
   });
 
+  it('applies the enemy and Resonance Mode a v3 link carries', () => {
+    const s = freshState();
+    s.setEnemyKind('mob');
+    useCalculatorStore.getState().loadSharedDraft({
+      sourceName: 'Boss build',
+      roster: { ...sharedEntry, characterId: 'denia', weaponId: 'augment' },
+      skippedBlocks: 0,
+      enemy: { kind: 'boss', level: 100, baseRES: 0.2 },
+      resonanceMode: 'tuneStrain',
+    });
+    expect(useCalculatorStore.getState()).toMatchObject({
+      enemyKind: 'boss',
+      enemyLevel: 100,
+      enemyBaseRES: 0.2,
+      resonanceMode: 'tuneStrain',
+    });
+  });
+
+  it('leaves the current enemy alone when the link carries none, and the mode only for the same character', () => {
+    const s = freshState();
+    s.setEnemyKind('boss');
+    s.setEnemyLevel(80);
+    s.setCharacterId('jiyan');
+    s.setResonanceMode('tuneRupture');
+    useCalculatorStore.getState().loadSharedDraft({ sourceName: 'Plain', roster: sharedEntry, skippedBlocks: 0 });
+    expect(useCalculatorStore.getState()).toMatchObject({ enemyKind: 'boss', enemyLevel: 80, resonanceMode: 'tuneRupture' });
+    useCalculatorStore.getState().loadSharedDraft({
+      sourceName: 'Other',
+      roster: { ...sharedEntry, characterId: 'denia', weaponId: 'augment' },
+      skippedBlocks: 0,
+    });
+    expect(useCalculatorStore.getState()).toMatchObject({ enemyKind: 'boss', enemyLevel: 80, resonanceMode: null });
+  });
+
+  it('resetAll clears the minimum-stat boxes', () => {
+    useCalculatorStore.getState().setMinStatTexts({ critRate: '70' });
+    useCalculatorStore.getState().resetAll();
+    expect(useCalculatorStore.getState().minStatTexts).toEqual({});
+  });
+
   it('is cleared by a roster prefill or a reset', () => {
     freshState().loadSharedDraft({ sourceName: 'X', roster: sharedEntry, skippedBlocks: 0 });
     useCalculatorStore.getState().resetFromRoster(entry);

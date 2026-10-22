@@ -99,15 +99,128 @@ describe('locked Echoes', () => {
   });
 });
 
-describe('minimum stats', () => {
-  it('never leak into a share link', async () => {
-    const bound: Build = { ...build, minStats: { energyRegen: 0.2, critRate: 0.6 } };
-    const payload = sharedBuildFromLibrary({ build: bound, roster, inventory, includeObjective: true });
-    expect(JSON.stringify(payload)).not.toContain('minStats');
-    expect(JSON.stringify(payload)).not.toContain('energyRegen');
-    expect(await encodeSharedBuild(payload)).toBe(
-      await encodeSharedBuild(sharedBuildFromLibrary({ build, roster, inventory, includeObjective: true })),
-    );
+describe('run settings in a link (v3)', () => {
+  const settings: Build = {
+    ...build,
+    enemy: { kind: 'boss', level: 100, baseRES: 0.2 },
+    minStats: { energyRegen: 0.2, critRate: 0.6 },
+  };
+  const dual: Build = { ...build, characterId: 'denia', weaponId: 'augment', resonanceMode: 'tuneStrain' };
+  const roundTrip = async (payload: SharedBuild) => decodeShareLink(await encodeSharedBuild(payload));
+
+  it('emits v2 when the build carries none, so plain links open in older app copies', async () => {
+    expect(shared().v).toBe(2);
+    const hash = await encodeSharedBuild(shared(true));
+    expect(hash.startsWith('#b=2.')).toBe(true);
+    // Non-positive minimums are no minimum; an unknown mode counts as unset (Jiyan has none).
+    const inert: Build = { ...build, minStats: { critRate: 0 }, resonanceMode: 'tuneStrain' };
+    const payload = sharedBuildFromLibrary({ build: inert, roster, inventory, includeObjective: false });
+    expect(payload.v).toBe(2);
+    expect(Object.keys(payload)).not.toEqual(expect.arrayContaining(['enemy']));
+    expect(await encodeSharedBuild(payload)).toBe(await encodeSharedBuild(shared()));
+  });
+
+  it('round-trips the enemy, tagged 3', async () => {
+    const payload = sharedBuildFromLibrary({ build: { ...build, enemy: settings.enemy }, roster, inventory, includeObjective: false });
+    expect(payload).toMatchObject({ v: 3, enemy: { kind: 'boss', level: 100, baseRES: 0.2 } });
+    expect(payload).not.toHaveProperty('minStats');
+    const hash = await encodeSharedBuild(payload);
+    expect(hash.startsWith('#b=3.')).toBe(true);
+    expect(await decodeShareLink(hash)).toEqual({ version: 3, shared: payload });
+  });
+
+  it('round-trips minimum stats (positive finite entries only)', async () => {
+    const withZero: Build = { ...build, minStats: { energyRegen: 0.2, critRate: 0.6, critDmg: 0 } };
+    const payload = sharedBuildFromLibrary({ build: withZero, roster, inventory, includeObjective: true });
+    expect(payload).toMatchObject({ v: 3, minStats: { energyRegen: 0.2, critRate: 0.6 } });
+    expect(payload.minStats).not.toHaveProperty('critDmg');
+    expect(await roundTrip(payload)).toEqual({ version: 3, shared: payload });
+  });
+
+  it("round-trips a dual-mode character's Resonance Mode", async () => {
+    const payload = sharedBuildFromLibrary({
+      build: dual,
+      roster: { ...roster, characterId: 'denia', weaponId: 'augment' },
+      inventory,
+      includeObjective: false,
+    });
+    expect(payload).toMatchObject({ v: 3, resonanceMode: 'tuneStrain' });
+    expect(await roundTrip(payload)).toEqual({ version: 3, shared: payload });
+  });
+
+  it('round-trips all three together, and still never carries ids, labels, notes or lock state', async () => {
+    const payload = sharedBuildFromLibrary({ build: settings, roster, inventory: inventory.map((e) => ({ ...e, locked: true as const })), includeObjective: true });
+    expect(payload.v).toBe(3);
+    expect(await roundTrip(payload)).toEqual({ version: 3, shared: payload });
+    for (const leaked of ['locked', 'secret label', 'private note', 'equippedTo', '"b1"']) {
+      expect(JSON.stringify(payload)).not.toContain(leaked);
+    }
+  });
+
+  it('does not alias the build: editing the payload leaves the build alone', () => {
+    const payload = sharedBuildFromLibrary({ build: settings, roster, inventory, includeObjective: false });
+    payload.minStats!.critRate = 9;
+    payload.enemy!.level = 1;
+    expect(settings.minStats?.critRate).toBe(0.6);
+    expect(settings.enemy?.level).toBe(100);
+  });
+
+  it('a v2 payload must not carry any of the new fields', async () => {
+    const v3 = sharedBuildFromLibrary({ build: settings, roster, inventory, includeObjective: false });
+    for (const extra of [{ enemy: v3.enemy }, { resonanceMode: 'tuneStrain' }, { minStats: v3.minStats }]) {
+      const bad = { ...shared(), ...extra };
+      expect(sharedBuildSchema.safeParse(bad).success).toBe(false);
+      await expect(decodeShareLink(await rawV2(JSON.stringify(bad)))).rejects.toThrow(/validation .*v2 link can't carry/);
+    }
+  });
+
+  it('a v3 payload is strict too, and its tag must match its version', async () => {
+    const v3 = sharedBuildFromLibrary({ build: settings, roster, inventory, includeObjective: false });
+    const raw = async (tag: number, json: unknown) => `#b=${tag}.${toBase64Url(await deflate(utf8(JSON.stringify(json))))}`;
+    await expect(decodeShareLink(await raw(3, { ...v3, extra: 1 }))).rejects.toThrow(/validation/);
+    await expect(decodeShareLink(await raw(3, { ...v3, enemy: { ...v3.enemy, extra: 1 } }))).rejects.toThrow(/validation/);
+    await expect(decodeShareLink(await raw(2, v3))).rejects.toThrow(/doesn't match|validation/);
+    await expect(decodeShareLink(await raw(3, shared()))).rejects.toThrow(/doesn't match/);
+  });
+
+  it('rejects out-of-bounds settings', async () => {
+    const v3 = sharedBuildFromLibrary({ build: settings, roster, inventory, includeObjective: false });
+    const bad = (patch: Partial<SharedBuild>) => sharedBuildSchema.safeParse({ ...v3, ...patch }).success;
+    expect(bad({})).toBe(true);
+    expect(bad({ enemy: { kind: 'boss', level: 121, baseRES: 0.2 } })).toBe(false);
+    expect(bad({ enemy: { kind: 'boss', level: 0, baseRES: 0.2 } })).toBe(false);
+    expect(bad({ enemy: { kind: 'boss', level: 90.5, baseRES: 0.2 } })).toBe(false);
+    expect(bad({ enemy: { kind: 'boss', level: 90, baseRES: 0.81 } })).toBe(false);
+    expect(bad({ enemy: { kind: 'boss', level: 90, baseRES: -0.1 } })).toBe(false);
+    expect(bad({ enemy: { kind: 'dragon' as 'boss', level: 90, baseRES: 0.1 } })).toBe(false);
+    expect(bad({ resonanceMode: '' })).toBe(false);
+    expect(bad({ resonanceMode: 'x'.repeat(41) })).toBe(false);
+    expect(bad({ minStats: {} })).toBe(false);
+    expect(bad({ minStats: { critRate: -0.1 } })).toBe(false);
+    expect(bad({ minStats: { critRate: 100_001 } })).toBe(false);
+    expect(bad({ minStats: { critRate: Number.POSITIVE_INFINITY } })).toBe(false);
+    expect(bad({ minStats: { notAStat: 1 } as never })).toBe(false);
+    expect(bad({ minStats: { critRate: 1, critDmg: 1, energyRegen: 1, hp: 1, atk: 1, def: 1, hpPct: 1, atkPct: 1, defPct: 1 } })).toBe(false);
+    expect(bad({ minStats: { critRate: 1, critDmg: 1, energyRegen: 1, hp: 1, atk: 1, def: 1, hpPct: 1, atkPct: 1 } })).toBe(true);
+    await expect(decodeShareLink(`#b=3.${toBase64Url(await deflate(utf8(JSON.stringify({ ...v3, minStats: { critRate: 'high' } }))))}`)).rejects.toThrow(/validation/);
+  });
+
+  it('refuses to encode settings the decoder would reject', async () => {
+    const tooMany: Build = { ...build, minStats: { critRate: 1, critDmg: 1, energyRegen: 1, hp: 1, atk: 1, def: 1, hpPct: 1, atkPct: 1, defPct: 1 } };
+    expect(() => sharedBuildFromLibrary({ build: tooMany, roster, inventory, includeObjective: false })).toThrow(/can't be shared as-is/);
+  });
+
+  it('re-shares a reference build with the settings it stored, and plain ones as v2', async () => {
+    const v3 = sharedBuildFromLibrary({ build: settings, roster, inventory, includeObjective: false });
+    const stored = referenceBuildFrom(v3);
+    expect(stored.reference).toEqual(v3);
+    const again = sharedBuildFromLibrary({ build: stored, roster: undefined, inventory: [], includeObjective: false });
+    expect(again).toMatchObject({ v: 3, enemy: v3.enemy, minStats: v3.minStats });
+    expect(sharedBuildFromLibrary({ build: referenceBuildFrom(shared()), roster: undefined, inventory: [], includeObjective: false }).v).toBe(2);
+  });
+
+  it('a future 4. tag is still unsupported', async () => {
+    await expect(decodeShareLink('#b=4.abc')).rejects.toThrow('unsupported build link version 4');
   });
 });
 
@@ -244,6 +357,16 @@ describe('v2 encode / decode', () => {
     expect(inflate).not.toHaveBeenCalled();
   });
 
+  it('applies the same hash and inflate caps to a v3 tag', async () => {
+    const inflate = vi.fn();
+    vi.stubGlobal('DecompressionStream', inflate);
+    await expect(decodeShareLink(`#b=3.${'A'.repeat(MAX_SHARE_HASH_LENGTH)}`)).rejects.toThrow(/too long/);
+    expect(inflate).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+    const bomb = await deflate(new Uint8Array(MAX_SHARE_JSON_BYTES * 4));
+    await expect(decodeShareLink(`#b=3.${toBase64Url(bomb)}`)).rejects.toThrow(/expands past 65536 bytes/);
+  });
+
   it('aborts a decompression bomb past the byte cap', async () => {
     // 4× the cap of zeros deflates to a few hundred bytes — well under the hash cap.
     const bomb = await deflate(new Uint8Array(MAX_SHARE_JSON_BYTES * 4));
@@ -270,7 +393,7 @@ describe('v2 encode / decode', () => {
   });
 
   it('rejects unknown versions, bad base64, and corrupt compressed data readably', async () => {
-    await expect(decodeShareLink('#b=3.abc')).rejects.toThrow(/unsupported build link version 3/);
+    await expect(decodeShareLink('#b=4.abc')).rejects.toThrow(/unsupported build link version 4/);
     await expect(decodeShareLink('#b=2.$$$')).rejects.toThrow(/base64/);
     await expect(decodeShareLink(`#b=2.${toBase64Url(utf8('not deflate at all, honest'))}`)).rejects.toThrow(
       /compressed data|JSON/,
@@ -396,5 +519,25 @@ describe('sharedCalculatorDraft', () => {
     expect(draft.rotation?.blocks.map((b) => b.motionName)).toEqual([MOTION]);
     expect(draft.skippedBlocks).toBe(1);
     expect(sharedCalculatorDraft(shared(), jiyan).rotation).toBeUndefined();
+  });
+});
+
+describe('sharedCalculatorDraft run settings', () => {
+  const denia = snapshot.characters.find((c) => c.id === 'denia')!;
+  const v3 = (over: Partial<SharedBuild>): SharedBuild => ({ ...shared(), v: 3, ...over });
+
+  it('carries the enemy, a known Resonance Mode and the minimums', () => {
+    const draft = sharedCalculatorDraft(
+      v3({ enemy: { kind: 'boss', level: 100, baseRES: 0.2 }, resonanceMode: 'tuneStrain', minStats: { critRate: 0.6 } }),
+      denia,
+    );
+    expect(draft).toMatchObject({ enemy: { kind: 'boss', level: 100, baseRES: 0.2 }, resonanceMode: 'tuneStrain', minStats: { critRate: 0.6 } });
+  });
+
+  it('counts a Resonance Mode the character does not have as unset, and leaves absent fields absent', () => {
+    expect(sharedCalculatorDraft(v3({ resonanceMode: 'tuneStrain' }), jiyan)).not.toHaveProperty('resonanceMode');
+    expect(sharedCalculatorDraft(v3({ resonanceMode: 'made-up' }), denia)).not.toHaveProperty('resonanceMode');
+    const plain = sharedCalculatorDraft(shared(), jiyan);
+    for (const key of ['enemy', 'resonanceMode', 'minStats']) expect(plain).not.toHaveProperty(key);
   });
 });

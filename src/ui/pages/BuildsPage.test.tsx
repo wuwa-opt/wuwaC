@@ -543,6 +543,138 @@ describe('BuildsPage', () => {
     expect(await db.builds.count()).toBe(0);
   });
 
+  describe('links that carry run settings (v3)', () => {
+    const v3: SharedBuild = {
+      ...sharedPayload,
+      v: 3,
+      enemy: { kind: 'boss', level: 100, baseRES: 0.2 },
+      minStats: { energyRegen: 0.2, critRate: 0.6 },
+    };
+    const denia: SharedBuild = {
+      ...v3,
+      character: { ...v3.character, id: 'denia' },
+      weapon: { ...v3.weapon, id: 'augment' },
+      resonanceMode: 'tuneStrain',
+    };
+
+    it('previews the enemy, Resonance Mode and minimum stats, and nothing for a plain link', async () => {
+      await openLink(denia);
+      const { unmount } = render(<BuildsPage />);
+      const settings = within(await screen.findByRole('region', { name: 'Shared build' })).getByLabelText('Run settings');
+      expect(settings).toHaveTextContent(/Enemy\s*boss, Lv 100, 20% base RES/);
+      expect(settings).toHaveTextContent(/Resonance Mode\s*Tune Strain/);
+      expect(settings).toHaveTextContent(/Minimum stats\s*Energy Regen ≥ 20%, Crit Rate ≥ 60%/);
+      unmount();
+
+      await openLink(sharedPayload);
+      render(<BuildsPage />);
+      const preview = await screen.findByRole('region', { name: 'Shared build' });
+      await within(preview).findByLabelText('Key stats');
+      expect(within(preview).queryByLabelText('Run settings')).not.toBeInTheDocument();
+    });
+
+    it("ignores a Resonance Mode the character doesn't have", async () => {
+      await openLink({ ...v3, resonanceMode: 'tuneStrain' }); // Jiyan has no modes
+      render(<BuildsPage />);
+      const settings = within(await screen.findByRole('region', { name: 'Shared build' })).getByLabelText('Run settings');
+      expect(settings).not.toHaveTextContent('Resonance Mode');
+      expect(settings).toHaveTextContent('Enemy');
+    });
+
+    it('Optimize with my Echoes applies them to the Calculator draft and prefills the minimums, writing nothing', async () => {
+      const user = userEvent.setup();
+      await db.roster.add(myRoster);
+      await openLink(denia);
+      render(<BuildsPage />);
+      const preview = await screen.findByRole('region', { name: 'Shared build' });
+      await user.click(within(preview).getByRole('button', { name: /optimize with my echoes/i }));
+      expect(useAppStore.getState().activeSection).toBe('calculator');
+      expect(useCalculatorStore.getState()).toMatchObject({
+        characterId: 'denia',
+        enemyKind: 'boss',
+        enemyLevel: 100,
+        enemyBaseRES: 0.2,
+        resonanceMode: 'tuneStrain',
+        rosterSourceId: '',
+        minStatTexts: { energyRegen: '20', critRate: '60' },
+      });
+      expect(await db.roster.get('jiyan')).toEqual(myRoster);
+      expect(await db.roster.count()).toBe(1);
+      expect(await db.builds.count()).toBe(0);
+    });
+
+    it('a v3 link without minimums clears the prefilled boxes, but leaves the enemy alone', async () => {
+      const user = userEvent.setup();
+      useCalculatorStore.getState().setEnemyLevel(77);
+      useCalculatorStore.getState().setMinStatTexts({ critDmg: '200', critRate: '70' });
+      const { minStats: _dropped, ...noMins } = v3;
+      void _dropped;
+      await openLink(noMins);
+      render(<BuildsPage />);
+      const preview = await screen.findByRole('region', { name: 'Shared build' });
+      await user.click(within(preview).getByRole('button', { name: /optimize with my echoes/i }));
+      expect(useCalculatorStore.getState().minStatTexts).toEqual({});
+      // The link's enemy is applied; only the boxes are cleared.
+      expect(useCalculatorStore.getState()).toMatchObject({ enemyLevel: 100, enemyKind: 'boss' });
+    });
+
+    it('a v3 link with minimums replaces whatever the boxes held', async () => {
+      const user = userEvent.setup();
+      useCalculatorStore.getState().setMinStatTexts({ critDmg: '200' });
+      await openLink(v3);
+      render(<BuildsPage />);
+      const preview = await screen.findByRole('region', { name: 'Shared build' });
+      await user.click(within(preview).getByRole('button', { name: /optimize with my echoes/i }));
+      expect(useCalculatorStore.getState().minStatTexts).toEqual({ energyRegen: '20', critRate: '60' });
+    });
+
+    it('a plain (v2) link leaves the Calculator enemy and minimum boxes alone', async () => {
+      const user = userEvent.setup();
+      useCalculatorStore.getState().setEnemyLevel(77);
+      useCalculatorStore.getState().setMinStatTexts({ critDmg: '200' });
+      await openLink(sharedPayload);
+      render(<BuildsPage />);
+      const preview = await screen.findByRole('region', { name: 'Shared build' });
+      await user.click(within(preview).getByRole('button', { name: /optimize with my echoes/i }));
+      expect(useCalculatorStore.getState()).toMatchObject({ enemyLevel: 77, minStatTexts: { critDmg: '200' } });
+    });
+
+    it('Save as reference keeps them, and the reference details show them', async () => {
+      const user = userEvent.setup();
+      await openLink(v3);
+      render(<BuildsPage />);
+      const preview = await screen.findByRole('region', { name: 'Shared build' });
+      await user.click(within(preview).getByRole('button', { name: /save as reference/i }));
+      await screen.findByText(/saved “friend jiyan” as a reference build/i);
+      const [row] = await db.builds.toArray();
+      expect(row.reference).toEqual(v3);
+
+      await user.click(await screen.findByRole('button', { name: /show details for friend jiyan/i }));
+      const region = screen.getByRole('region', { name: /details for friend jiyan/i });
+      expect(region).toHaveTextContent(/Enemy\s*boss, Lv 100, 20% base RES/);
+      expect(region).toHaveTextContent(/Minimum stats\s*Energy Regen ≥ 20%, Crit Rate ≥ 60%/);
+    });
+
+    it('Copy link on an own build with settings produces a v3 link that opens', async () => {
+      const user = userEvent.setup();
+      await db.ownedEchoes.bulkAdd(ownEchoes);
+      await db.roster.add(myRoster);
+      await useLibraryStore.getState().saveBuild({
+        ...seed,
+        enemy: { kind: 'boss', level: 100, baseRES: 0.2 },
+        minStats: { critRate: 0.6 },
+      });
+      let copied = '';
+      vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText: (t: string) => ((copied = t), Promise.resolve()) } });
+      render(<BuildsPage />);
+      await screen.findByText('Seeded Build');
+      await user.click(screen.getByRole('button', { name: /copy link/i }));
+      await vi.waitFor(() => expect(copied).toContain('#b=3.'));
+      const decoded = await decodeShareLink(copied.slice(copied.indexOf('#b=')));
+      expect(decoded).toMatchObject({ version: 3, shared: { enemy: { level: 100 }, minStats: { critRate: 0.6 } } });
+    });
+  });
+
   it('previews a shared build from the link and writes nothing until Import', async () => {
     const user = userEvent.setup();
     const saved = await useLibraryStore.getState().saveBuild(seed);

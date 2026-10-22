@@ -293,6 +293,62 @@ describe('reference builds (saved share links)', () => {
   });
 });
 
+describe('reference builds with run settings (v3 payload)', () => {
+  const v2: SharedBuild = {
+    v: 2,
+    name: 'Old link',
+    summary: 'Expected damage',
+    character: { id: 'jiyan', level: 90, ascension: 6, chain: 0, forte: { '1001103': 10 } },
+    weapon: { id: 'verdant-summit', level: 90, ascension: 6, rank: 1 },
+    echoes: Array.from({ length: 5 }, (_, i) => ({
+      def: `def-${i}`,
+      set: 'sierra-gale',
+      cost: 1 as const,
+      level: 25,
+      rarity: 5,
+      main: { stat: 'atkPct' as const, value: 0.18 },
+      subs: [],
+    })) as unknown as SharedBuild['echoes'],
+  };
+  const v3: SharedBuild = {
+    ...v2,
+    v: 3,
+    name: 'New link',
+    enemy: { kind: 'boss', level: 100, baseRES: 0.2 },
+    resonanceMode: 'tuneStrain',
+    minStats: { critRate: 0.6 },
+  };
+
+  it('stored v2 references still parse, and a v3 one parses and keeps its settings', async () => {
+    expect(referenceBuildFrom(v2).reference).toEqual(v2);
+    expect(referenceBuildFrom(v3).reference).toEqual(v3);
+    const { added } = await useLibraryStore.getState().importBuilds([referenceBuildFrom(v2), referenceBuildFrom(v3)]);
+    expect(added).toBe(2);
+    useLibraryStore.setState({ builds: [], loaded: false });
+    await useLibraryStore.getState().load();
+    const byName = Object.fromEntries(useLibraryStore.getState().builds.map((b) => [b.name, b.reference]));
+    expect(byName['Old link']).toEqual(v2);
+    expect(byName['New link']).toEqual(v3);
+  });
+
+  it('both validate in a version-1 backup and survive JSON export', () => {
+    const refs = [referenceBuildFrom(v2), referenceBuildFrom(v3)];
+    expect(JSON.parse(serializeBuilds(refs))).toEqual(refs);
+    const backup = {
+      format: BACKUP_FORMAT,
+      version: 1,
+      exportedAt: '2026-10-22T00:00:00.000Z',
+      tables: { ownedEchoes: [], roster: [], builds: refs, teams: [] },
+    };
+    expect(parseBackup(backup).tables.builds.map((b) => b.reference)).toEqual([v2, v3]);
+  });
+
+  it('a v2 payload carrying a v3 field is refused on import', async () => {
+    const bad = { ...referenceBuildFrom(v2), reference: { ...v2, minStats: { critRate: 0.6 } } };
+    await expect(useLibraryStore.getState().importBuilds([bad])).rejects.toThrow();
+  });
+});
+
 describe('library store: saveBuilds / removeBuilds', () => {
   const draft = (name: string): Omit<Build, 'id' | 'updatedAt'> => ({
     name,

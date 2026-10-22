@@ -12,6 +12,13 @@
  *   from the cost's pool (`MAIN_STAT_POOLS`) at its Lv25 maximum
  *   (`MAIN_STAT_RANGES`), the fixed secondary (`SECONDARY_MAIN_STAT_MAX`),
  *   five distinct substats at random tiers (`SUB_STAT_TIERS`).
+ * - seed: the distribution of the Inventory page's dev seeder
+ *   (`buildSeedEchoes` in src/state/seed.ts, mirrored in `makeSeedInventory`
+ *   because that module needs the browser DB) — real echo defs, so every Sonata set in the snapshot and the defs' real
+ *   cost mix — scored the way the Calculator's default does: the first
+ *   character, its first weapon of type, a one-block rotation (first motion
+ *   of the first skill with motions). Many sets, a few of them with big
+ *   1- or 3-piece bonuses, is what made this case slow before 2026-10-22.
  *
  * Run: npm run bench                                   (both inventories, n = 12..300)
  *      npx tsx scripts/bench-optimizer.ts 50 100       (pick sizes)
@@ -23,7 +30,7 @@ import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
 import { MAIN_STAT_RANGES, SECONDARY_MAIN_STAT_MAX, SUB_STAT_TIERS } from '../src/data/echoStats.ts';
-import { MAIN_STAT_POOLS } from '../src/data/placeholders.ts';
+import { MAIN_STAT_POOLS, SUBSTAT_POOL } from '../src/data/placeholders.ts';
 import { snapshotSchema, type Snapshot } from '../src/data/schema.ts';
 import type { OwnedEcho, StatKey } from '../src/data/schema.ts';
 import { standardMob } from '../src/domain/damage.ts';
@@ -120,13 +127,82 @@ function makeRealisticInventory(n: number): OwnedEcho[] {
   });
 }
 
-type InventoryKind = 'synthetic' | 'realistic';
+type InventoryKind = 'synthetic' | 'realistic' | 'seed';
 
 function loadSnapshot(): Snapshot {
   return snapshotSchema.parse(JSON.parse(readFileSync('src/data/generated/snapshot.json', 'utf8')) as unknown);
 }
 
+/** Mirrors `buildSeedEchoes` (src/state/seed.ts): random real def, documented Lv25 main, 3–5 tiered substats. */
+function makeSeedInventory(snapshot: Snapshot, n: number): OwnedEcho[] {
+  const rand = rng(1);
+  const pick = <T>(list: readonly T[]): T => list[Math.floor(rand() * list.length)];
+  return Array.from({ length: n }, (_, i) => {
+    const def = pick(snapshot.echoDefs);
+    const mainStat = pick(def.allowedMainStats.filter((s) => MAIN_STAT_RANGES[def.cost][s] !== undefined));
+    const subCount = 3 + Math.floor(rand() * 3);
+    const pool = SUBSTAT_POOL.filter((s) => s !== mainStat && SUB_STAT_TIERS[s] !== undefined);
+    const substats: OwnedEcho['substats'] = [];
+    for (let s = 0; s < subCount && pool.length > 0; s += 1) {
+      const [stat] = pool.splice(Math.floor(rand() * pool.length), 1);
+      substats.push({ stat, value: pick(SUB_STAT_TIERS[stat]!) });
+    }
+    return {
+      id: `seed-${i}`,
+      label: def.name,
+      echoDefId: def.id,
+      sonataId: pick(def.sonataIds),
+      cost: def.cost,
+      level: 25,
+      rarity: 5,
+      mainStat: { stat: mainStat, value: MAIN_STAT_RANGES[def.cost][mainStat]!.max },
+      substats,
+      equippedTo: null,
+      origin: 'bench',
+    };
+  });
+}
+
+function seedCase(snapshot: Snapshot, n: number): { data: SearchData; request: OptimizeRequest } {
+  const character = snapshot.characters[0];
+  const weapon = snapshot.weapons.find((w) => w.weaponType === character.weaponType) ?? snapshot.weapons[0];
+  const skill = character.skills.find((s) => s.motionValues.length > 0)!;
+  const echoes = makeSeedInventory(snapshot, n);
+  return {
+    data: {
+      character,
+      weapon,
+      roster: {
+        characterId: character.id,
+        level: 90,
+        ascension: 6,
+        resonanceChain: 0,
+        forteLevels: Object.fromEntries(character.skills.map((s) => [s.id, 10])),
+        weaponId: weapon.id,
+        weaponLevel: 90,
+        weaponRank: 1,
+      },
+      echoes,
+      sonataSets: snapshot.sonataSets,
+      enemy: standardMob(90),
+    },
+    request: {
+      costBudget: 12,
+      sonataLock: { mode: 'none' },
+      objective: {
+        kind: 'rotation-dpr',
+        blocks: [{ skillId: skill.id, motionName: skill.motionValues[0].name, forteLevel: 10, activeBuffIds: [] }],
+        buffs: [],
+        globalBuffIds: [],
+        crit: 'expected',
+      },
+      topN: 5,
+    },
+  };
+}
+
 function benchCase(snapshot: Snapshot, kind: InventoryKind, n: number): { data: SearchData; request: OptimizeRequest } {
+  if (kind === 'seed') return seedCase(snapshot, n);
   const character = snapshot.characters.find((c) => c.id === 'jiyan')!;
   const weapon = snapshot.weapons.find((w) => w.id === 'verdant-summit')!;
   const liberation = character.skills.find((s) => s.kind === 'liberation')!;
@@ -209,7 +285,11 @@ async function main(): Promise<void> {
   const workers = Number(process.env.WORKERS ?? 0);
   const inventory = process.env.INVENTORY ?? 'both';
   const kinds: InventoryKind[] =
-    inventory === 'synthetic' || inventory === 'realistic' ? [inventory] : ['synthetic', 'realistic'];
+    inventory === 'synthetic' || inventory === 'realistic' || inventory === 'seed'
+      ? [inventory]
+      : inventory === 'all'
+        ? ['synthetic', 'realistic', 'seed']
+        : ['synthetic', 'realistic'];
 
   console.log(`snapshot parse+validate: ${parseMs.toFixed(0)}ms`);
   for (const kind of kinds) {

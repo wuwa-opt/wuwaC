@@ -1,4 +1,5 @@
-import { useAnimatedNumber } from '../motion.ts';
+import type { CSSProperties } from 'react';
+import { formatElapsed, useAnimatedNumber, useElapsedSeconds } from '../motion.ts';
 import type { HoldReason, Toast } from '../toasts.ts';
 
 /* Live-feedback primitives: animated readouts, bars, skeletons, toasts.
@@ -51,6 +52,26 @@ export function ScoreBar({ share, className = '' }: { share: number; className?:
         style={{ width: `${Math.max(0, Math.min(100, share))}%` }}
       />
     </div>
+  );
+}
+
+/**
+ * Proof of life for a long run: a row of pixel blocks that chase left to
+ * right (still under reduced motion) and "Running for m:ss". Purely visual
+ * (`aria-hidden`); the caller owns the live region. Mount it only while the
+ * run lasts; unmounting stops its timer.
+ */
+export function RunClock({ className = '' }: { className?: string }) {
+  const seconds = useElapsedSeconds();
+  return (
+    <span aria-hidden="true" className={`inline-flex items-center gap-2 ${className}`}>
+      <span className="inline-flex gap-0.5 border-2 border-outline bg-panel p-0.5">
+        {Array.from({ length: 8 }, (_, i) => (
+          <span key={i} style={{ '--i': i } as CSSProperties} className="px-activity h-[10px] w-[6px] bg-meter" />
+        ))}
+      </span>
+      <span className="tnum">Running for {formatElapsed(seconds)}</span>
+    </span>
   );
 }
 

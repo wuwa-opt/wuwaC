@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Build, OwnedEcho, RosterEntry, StatKey, Team } from '../../data/schema.ts';
 import type { RunFn } from '../../optimizer/allocate.ts';
@@ -409,6 +409,37 @@ describe('TeamAllocation', () => {
     act(() => report!(50, 100));
     expect(await screen.findByText('Scoring equipped Echoes: Jiyan (1 of 3) — 50%')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Move Jiyan down' })).toBeDisabled(); // no reordering mid-run
+  });
+
+  it('shows elapsed time and activity while running, and stops the timer on Cancel', async () => {
+    vi.useFakeTimers();
+    try {
+      let report: ((evaluated: number, total: number) => void) | null = null;
+      const run: RunFn = () => ({
+        promise: new Promise(() => undefined),
+        cancel: () => undefined,
+        onProgress: (cb) => (report = cb),
+      });
+      renderAllocation({ run });
+      fireEvent.click(screen.getByRole('button', { name: 'Allocate Echoes' }));
+      await act(async () => {
+        for (let i = 0; i < 5; i += 1) await Promise.resolve();
+      });
+      expect(report).not.toBeNull();
+      expect(screen.getByText('Running for 0:00')).toBeInTheDocument();
+      act(() => report!(0, 100));
+      act(() => {
+        vi.advanceTimersByTime(65_000);
+      });
+      expect(screen.getByText('Running for 1:05')).toBeInTheDocument();
+      // The live region names the step but not the ticking percent.
+      expect(screen.getByText('Scoring equipped Echoes: Jiyan (1 of 3).')).toHaveAttribute('role', 'status');
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByText(/Running for/)).not.toBeInTheDocument();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects a bad minimum level', async () => {

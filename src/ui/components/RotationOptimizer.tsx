@@ -18,6 +18,7 @@ import { useLibraryStore } from '../../state/library.ts';
 import { parseDisplayValue } from '../format.ts';
 import { btnOutline, btnPrimary, labelClass, selectClass } from './classes.ts';
 import { Collapsible } from './Collapsible.tsx';
+import { RunClock } from './feedback.tsx';
 import { Alert, Window } from './ui.tsx';
 
 type Status =
@@ -46,6 +47,9 @@ interface RotationOptimizerProps {
   onApply: (echoIds: string[]) => void;
 }
 
+/** Candidate count from which the Sonata lock tip is shown. */
+const LOCK_TIP_MIN_CANDIDATES = 100;
+
 /**
  * The optional minimum-stat inputs, in the order shown. Typed as % and stored
  * as sheet fractions (`parseDisplayValue`), which is what `minStats` expects.
@@ -57,6 +61,40 @@ const MIN_STAT_FIELDS: { stat: StatKey; label: string; hint?: string }[] = [
   { stat: 'critRate', label: 'Crit Rate %' },
   { stat: 'critDmg', label: 'Crit DMG %' },
 ];
+
+/**
+ * What the user sees while a search runs. The search can sit for minutes
+ * without the count moving, so the block shows proof of life that doesn't
+ * depend on it (the activity blocks and the elapsed time), and says the count
+ * can jump. No ETA: progress isn't linear. Mounted only while running, so the
+ * elapsed timer stops with the run.
+ *
+ * Screen readers get one calm live region that changes only when the phase
+ * changes or another quarter is checked; the ticking text is `aria-hidden`.
+ */
+function RunStatus({ evaluated, total }: { evaluated: number; total: number }) {
+  const known = total > 0;
+  const percent = known ? Math.min(100, Math.floor((evaluated / total) * 100)) : 0;
+  const quarter = Math.min(75, Math.floor(percent / 25) * 25);
+  return (
+    <div className="mt-3 space-y-1 text-xs text-accent-text">
+      <p role="status" className="sr-only">
+        {known ? `Search running, ${quarter}% or more checked.` : 'Preparing the search.'}
+      </p>
+      <RunClock />
+      <p aria-hidden="true" className="tnum">
+        {known
+          ? `Checked ${evaluated.toLocaleString()} of ${total.toLocaleString()} combos (${percent}%)…`
+          : 'Preparing the search…'}
+      </p>
+      {known && (
+        <p aria-hidden="true" className="text-fog">
+          The count can jump: whole groups of combos are ruled out at once.
+        </p>
+      )}
+    </div>
+  );
+}
 
 /**
  * Minimal rotation optimizer: Top N + run, ranked by rotation DPR
@@ -99,6 +137,10 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
   const activeMins = MIN_STAT_FIELDS.filter(({ stat }) => (minTexts[stat]?.trim() ?? '') !== '').length;
   const tooFew = echoes.length < 5;
   const tooFewCandidates = candidates.length < 5;
+  // Measured on realistic inventories (scripts/bench-optimizer.ts generators):
+  // the 5-piece lock is 10-25x faster, 2+2 only ~1.4-1.7x. Smaller pools finish
+  // in about a second unlocked, so the tip only appears where it can matter.
+  const showLockTip = lockMode !== 'five' && candidates.length >= LOCK_TIP_MIN_CANDIDATES;
   const canRun = blocks.length > 0 && !tooFew && !tooFewCandidates;
 
   const handleRun = (): void => {
@@ -306,6 +348,12 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
           up to 12 cost (e.g. 4-4-1-1-1 and 4-3-3-1-1).
           {tooFewCandidates && ' Loosen the filters: at least 5 are needed.'}
         </p>
+        {showLockTip && (
+          <p className="mt-1 text-xs text-fog">
+            Tip: a 5-piece Sonata lock makes the search many times faster (a 2+2 lock helps much less). If you already
+            know the set you want, pick it above.
+          </p>
+        )}
         <div className="mt-3 flex flex-wrap gap-2">
           <button
             type="button"
@@ -325,11 +373,7 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
         </>
       )}
 
-      {status.kind === 'running' && (
-        <p className="mt-3 text-xs text-accent-text tnum" role="status">
-          Checked {status.evaluated.toLocaleString()} of {status.total.toLocaleString()} combos…
-        </p>
-      )}
+      {status.kind === 'running' && <RunStatus evaluated={status.evaluated} total={status.total} />}
       {status.kind === 'error' && (
         <Alert tone="danger" className="mt-3">
           {status.message}

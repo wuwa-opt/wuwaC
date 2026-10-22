@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { loadBundledSnapshot } from '../data/index.ts';
+import { MAIN_STAT_RANGES, SUB_STAT_TIERS } from '../data/echoStats.ts';
 import type { OwnedEcho, RosterEntry, StatKey } from '../data/schema.ts';
 import { standardMob } from '../domain/damage.ts';
 import { computeStats } from '../domain/stats.ts';
@@ -660,6 +661,68 @@ describe('exact search equivalence with the brute-force reference', () => {
     // The bounds must actually skip work somewhere, or this proves nothing.
     expect(boundedAway).toBeGreaterThan(0);
   });
+
+  it('matches the reference with real Sonata sets (1-, 2-, 3- and 5-piece bonuses)', () => {
+    // Real defs from a few real sets per trial, always including Shadow of
+    // Shattered Dreams (bonus at 1 piece) and Crown of Valor (at 3), so set
+    // bonuses complete, defs repeat, and some sets have a single Echo —
+    // the cases the per-set available-defs bound has to get right. Trials
+    // with more than 8 Echoes of one cost also run the seed search.
+    const rand = rng(20261022);
+    const pick = <T,>(list: readonly T[]): T => list[Math.floor(rand() * list.length)];
+    const yangyang = snapshot.characters.find((c) => c.id === 'yangyang')!;
+    const sword = snapshot.weapons.find((w) => w.weaponType === yangyang.weaponType)!;
+    const basic = yangyang.skills.find((s) => s.kind === 'basic')!;
+    const forteLevels = Object.fromEntries(yangyang.skills.map((s) => [s.id, 10]));
+    const subStats = Object.keys(SUB_STAT_TIERS) as StatKey[];
+    let boundedAway = 0;
+    for (let trial = 0; trial < 16; trial += 1) {
+      const setIds = ['shadow-of-shattered-dreams', 'crown-of-valor', pick(snapshot.sonataSets).id, pick(snapshot.sonataSets).id];
+      const defs = snapshot.echoDefs.filter((d) => d.sonataIds.some((id) => setIds.includes(id)));
+      const inventory = Array.from({ length: 13 + Math.floor(rand() * 6) }, (_, i) => {
+        const def = pick(defs);
+        const main = pick(def.allowedMainStats.filter((s) => MAIN_STAT_RANGES[def.cost][s] !== undefined));
+        const subs = subStats.filter(() => rand() < 0.35).map((s): [StatKey, number] => [s, pick(SUB_STAT_TIERS[s]!)]);
+        return mkEcho(`s${i}`, {
+          main: [main, MAIN_STAT_RANGES[def.cost][main]!.max],
+          subs,
+          cost: def.cost as 1 | 3 | 4,
+          sonata: pick(def.sonataIds.filter((id) => setIds.includes(id))),
+          def: def.id,
+        });
+      });
+      const request: OptimizeRequest = {
+        ...randomRequest(rand),
+        objective: pick<OptimizeRequest['objective']>([
+          { kind: 'max-stat', stat: 'dmgBonus:basic' },
+          { kind: 'expected-damage', skillId: basic.id, motionName: basic.motionValues[0].name, forteLevel: 10, crit: 'expected' },
+          {
+            kind: 'rotation-dpr',
+            blocks: [{ skillId: basic.id, motionName: basic.motionValues[0].name, forteLevel: 10, activeBuffIds: [] }],
+            buffs: [],
+            globalBuffIds: [],
+            crit: 'expected',
+          },
+        ]),
+        sonataLock: { mode: 'none' },
+      };
+      const subject: SearchData = {
+        ...data,
+        character: yangyang,
+        weapon: sword,
+        roster: { ...roster, characterId: 'yangyang', forteLevels, weaponId: sword.id },
+        echoes: inventory,
+        sonataSets: snapshot.sonataSets,
+      };
+      const fast = searchExhaustive(subject, request);
+      expect(observable(fast, true), `trial ${trial}`).toEqual(observable(searchReference(subject, request), true));
+      boundedAway += fast.evaluated - fast.scored;
+      const shards = [0, 1, 2].map((index) => searchExhaustive(subject, request, undefined, { index, count: 3 }));
+      expect(shards.reduce((sum, r) => sum + r.evaluated, 0), `trial ${trial} coverage`).toBe(fast.total);
+      expect(mergeShardResults(subject, request.topN, shards).builds, `trial ${trial} shards`).toEqual(fast.builds);
+    }
+    expect(boundedAway).toBeGreaterThan(0);
+  }, 60_000);
 
   it('skips most combos on a larger inventory and still matches (n = 22)', () => {
     const inventory = randomInventory(rng(7), 22);

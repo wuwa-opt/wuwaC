@@ -320,21 +320,35 @@ function insertBounded(top: RankedBuild[], build: RankedBuild, topN: number): vo
  *   checked non-negative and non-decreasing in pieces (else bounds are
  *   off), and because objective scores never decrease when a sheet stat
  *   rises — the same monotonicity the dominance pruning's swap step uses.
+ * - The Sonata part of a bound (`addSetBound`) shares the remaining slots
+ *   out among sets per stat, each slot to one set, and lets a set gain only
+ *   as many pieces as it has distinct defs left among the remaining slots'
+ *   candidates. A lone 4-cost of a set with a 1-piece bonus can't lift
+ *   bounds once the 4-cost slots are filled; with ~37 sets in a real
+ *   inventory, crediting every set's best bonus everywhere left bounds too
+ *   loose to cut.
+ * - The N-th score starts at `seedFloor`: an exact search over each cost's
+ *   8 best echoes, so bounds cut from the first combo in every shard.
  * - Leaves are screened with the decomposed sheet; only combos that could
  *   enter the top N are re-scored exactly through `computeStats`.
- * - `shard` splits the work into deterministic slices (pattern × first
- *   echo) so worker.ts can run them in parallel and merge the top-Ns.
+ * - `shard` splits the work into deterministic slices (pattern × first two
+ *   echoes, dealt by position) so worker.ts can run them in parallel and
+ *   merge the top-Ns.
  *
- * Scaling (measured 2026-10-20, `npm run bench`, Jiyan expected
- * liberation damage, top 5, budget 12, one thread; identical top-N to the
- * reference wherever both ran). Dominance pruning (prune.ts) is sound but
- * weak — it drops 0–82 echoes here — so the speed comes from the bounds:
- *   synthetic inventory  n=50 0.2s (reference 19s), n=100 7s, n=200 30s,
- *                        n=300 90s (≈28s on 8 workers)
- *   realistic Lv25 inv.  n=50 0.13s (reference 53s), n=100 0.8s,
- *                        n=200 1.4s, n=300 2.7s
+ * Scaling (measured 2026-10-22, `npm run bench`, top 5, budget 12, one
+ * thread unless noted, medians of 3; identical top-N to the reference
+ * wherever both ran). Dominance pruning (prune.ts) is sound but weak — it
+ * drops 0–82 echoes here — so the speed comes from the bounds:
+ *   synthetic (Jiyan, expected liberation damage)  n=100 5s, n=200 31s,
+ *                        n=300 95s (28s on 4 workers)
+ *   realistic Lv25 (same objective)  n=100 0.6s, n=200 0.7s, n=300 1.1s
+ *   seed (dev seeder, 37 sets, one-block rotation)  n=100 3.6s,
+ *                        n=200 46s (12s on 8 workers); n=240 22s on
+ *                        8 workers (341s before the Sonata bound above)
  * The synthetic generator draws any main stat for any cost, which keeps
  * per-stat maxima loose; real cost-restricted main stats bound far tighter.
+ * Time per bound grows with the objective: an 11-block rotation costs
+ * ~3x an expected-damage score.
  */
 export function searchExhaustive(
   data: SearchData,
@@ -346,16 +360,56 @@ export function searchExhaustive(
     throw new Error(`invalid shard ${shard.index}/${shard.count}`);
   }
   const prepared = prepare(data, request);
+  const floor = seedFloor(data, request, prepared);
   try {
-    return runPatternSearch(data, request, prepared, onProgress, shard, true);
+    return runPatternSearch(data, request, prepared, onProgress, shard, true, floor);
   } catch (err) {
     if (!(err instanceof DecompositionMismatch)) throw err;
-    return runPatternSearch(data, request, prepared, onProgress, shard, false);
+    return runPatternSearch(data, request, prepared, onProgress, shard, false, floor);
   }
 }
 
 /** The decomposed sheet disagreed with `computeStats`; rerun without it. */
 class DecompositionMismatch extends Error {}
+
+/** Echoes per cost in the seed search's pool (see `seedFloor`). */
+const SEED_PER_COST = 8;
+
+/**
+ * A score the N-th best combo is known to reach, found before the main
+ * search so its bounds cut from the start (and every shard gets the same
+ * one, instead of a threshold built only from its own slice). It is the
+ * N-th score of an exact search over a small pool: each cost's
+ * `SEED_PER_COST` best echoes by solo score. Those are N real combos of the
+ * full pool, scored exactly, so the full top N all score at least this.
+ * Only bounds use it — the combos themselves are found again by the main
+ * search, so results and tie order are unchanged. -Infinity when the small
+ * pool is the whole pool or yields fewer than N combos.
+ */
+function seedFloor(data: SearchData, request: OptimizeRequest, prepared: Prepared): number {
+  const lock = request.sonataLock;
+  const pool = lock.mode === 'five' ? prepared.kept.filter((e) => e.sonataId === lock.setId) : prepared.kept;
+  const solo = new Map(pool.map((e) => [e, prepared.score(prepared.stats([e]).sheet)] as const));
+  const index = new Map(prepared.kept.map((e, i) => [e, i] as const));
+  const picked = new Set<OwnedEcho>();
+  for (const cost of new Set(pool.map((e) => e.cost))) {
+    const ranked = pool
+      .filter((e) => e.cost === cost)
+      .sort((x, y) => solo.get(y)! - solo.get(x)! || index.get(x)! - index.get(y)!);
+    for (const echo of ranked.slice(0, SEED_PER_COST)) picked.add(echo);
+  }
+  if (picked.size === pool.length) return -Infinity;
+  const seed = { ...prepared, kept: prepared.kept.filter((e) => picked.has(e)) };
+  const whole: SearchShard = { index: 0, count: 1 };
+  let result: SearchResult;
+  try {
+    result = runPatternSearch(data, request, seed, undefined, whole, true, -Infinity);
+  } catch (err) {
+    if (!(err instanceof DecompositionMismatch)) throw err;
+    return -Infinity;
+  }
+  return result.builds.length >= request.topN ? result.builds[request.topN - 1].score : -Infinity;
+}
 
 const STAT_KEYS = Object.keys(emptySheet()) as StatKey[];
 /** Most like-echo neighbours bounded together (see `chunkMax`). */
@@ -541,6 +595,8 @@ function runPatternSearch(
   onProgress: ((update: ProgressUpdate) => void) | undefined,
   shard: SearchShard,
   decompose: boolean,
+  /** A score the N-th best combo reaches (`seedFloor`); -Infinity for none. */
+  floor: number,
 ): SearchResult {
   const { kept, minEntries } = prepared;
   const lock = request.sonataLock;
@@ -730,21 +786,87 @@ function runPatternSearch(
       topSum.push(table);
     }
   }
-  // NEW[r]: per stat, the most any r new pieces could add across sets.
-  const newSetGain: Float64Array[] = Array.from({ length: 6 }, () => new Float64Array(S));
-  if (useBounds) {
-    for (let i = 0; i < S; i += 1) {
-      let dp = [0, 0, 0, 0, 0, 0];
-      for (const gains of sonataGain.values()) {
-        const next = [...dp];
-        for (let c = 1; c <= 5; c += 1) {
-          for (let a = 1; a <= c; a += 1) next[c] = Math.max(next[c], dp[c - a] + gains[a][i]);
-        }
-        dp = next;
-      }
-      for (let r = 0; r <= 5; r += 1) newSetGain[r][i] = dp[r];
-    }
+  // Sonata part of the bounds: sets by index, the stats each set's gain
+  // moves, and per group suffix the distinct defs each set still offers.
+  const setIds = [...sonataGain.keys()];
+  const setIndex = new Map(setIds.map((id, k) => [id, k] as const));
+  const setCount = setIds.length;
+  const setGains = setIds.map((id) => sonataGain.get(id)!);
+  /** movedBy[i]: sets whose gain moves stat i (gains never shrink, so the 5-piece row shows it). */
+  const movedBy: number[][] = Array.from({ length: S }, () => []);
+  for (let k = 0; k < setCount; k += 1) {
+    for (let i = 0; i < S; i += 1) if (setGains[k][5][i] !== 0) movedBy[i].push(k);
   }
+  const setStats = movedBy.flatMap((sets, i) => (sets.length > 0 ? [i] : []));
+  /** defsLeft[g][p * setCount + k]: distinct defs of set k among groups[g][p..]. */
+  const defsLeft: Int32Array[] = groups.map((list) => {
+    const table = new Int32Array((list.length + 1) * setCount);
+    const seen = new Set<string>();
+    for (let q = list.length - 1; q >= 0; q -= 1) {
+      table.copyWithin(q * setCount, (q + 1) * setCount, (q + 2) * setCount);
+      const echo = list[q];
+      const k = setIndex.get(echo.sonataId);
+      const key = `${echo.sonataId}\u0000${echo.echoDefId}`;
+      if (k !== undefined && !seen.has(key)) {
+        seen.add(key);
+        table[q * setCount + k] += 1;
+      }
+    }
+    return table;
+  });
+  // Scratch for `addSetBound`.
+  const available = new Int32Array(setCount);
+  const pieceCount = new Int32Array(setCount);
+  const best = new Float64Array(6);
+  const next = new Float64Array(6);
+  /**
+   * Adds the Sonata gains a combo can reach from `pieces` once `remaining`
+   * slots are filled from candidates offering `available` distinct defs per
+   * set: the gains the pieces already have, plus, per stat, the best split
+   * of the remaining slots among sets (each slot joins one set, and a set
+   * gains at most its available defs). Gains never shrink as pieces grow,
+   * so this is at least any reachable combo's gains.
+   */
+  const addSetBound = (v: Float64Array, pieces: { sets: string[]; counts: number[] }, remaining: number): void => {
+    pieceCount.fill(0);
+    for (let k = 0; k < pieces.sets.length; k += 1) {
+      const at = setIndex.get(pieces.sets[k]);
+      if (at === undefined) continue;
+      pieceCount[at] = pieces.counts[k];
+      addInto(v, setGains[at][Math.min(5, pieces.counts[k])]);
+    }
+    for (const i of setStats) {
+      const sets = movedBy[i];
+      if (sets.length === 1) {
+        // One set: gains never shrink, so it takes every slot it can fill.
+        const k = sets[0];
+        const have = pieceCount[k];
+        const add = Math.min(available[k], remaining);
+        if (add > 0) v[i] += setGains[k][Math.min(5, have + add)][i] - setGains[k][Math.min(5, have)][i];
+        continue;
+      }
+      best.fill(-Infinity);
+      best[0] = 0;
+      for (const k of sets) {
+        const cap = Math.min(available[k], remaining);
+        if (cap === 0) continue;
+        const gains = setGains[k];
+        const have = pieceCount[k];
+        const now = gains[Math.min(5, have)][i];
+        next.set(best);
+        for (let used = 1; used <= remaining; used += 1) {
+          for (let a = 1; a <= Math.min(cap, used); a += 1) {
+            const value = best[used - a] + gains[Math.min(5, have + a)][i] - now;
+            if (value > next[used]) next[used] = value;
+          }
+        }
+        best.set(next);
+      }
+      let most = 0;
+      for (let used = 1; used <= remaining; used += 1) if (best[used] > most) most = best[used];
+      v[i] += most;
+    }
+  };
   const mainMax = new Float64Array(S);
   for (const gain of mainGain.values()) {
     for (let i = 0; i < S; i += 1) mainMax[i] = Math.max(mainMax[i], gain[i]);
@@ -775,10 +897,11 @@ function runPatternSearch(
       const value = v[index];
       if (value + slack(value) < minimum) return true;
     }
-    if (!board.full) return false;
+    const threshold = Math.max(board.threshold, floor);
+    if (threshold === -Infinity) return false;
     for (let i = 0; i < S; i += 1) boundSheet[STAT_KEYS[i]] = v[i];
     const bound = prepared.score(boundSheet);
-    return bound + slack(bound) < board.threshold;
+    return bound + slack(bound) < threshold;
   };
 
   const chosen: OwnedEcho[] = [];
@@ -800,21 +923,27 @@ function runPatternSearch(
       }
       return product;
     };
+    /** Fills `available` for slots depth.., the current group's candidates starting at `from`. */
+    const countAvailable = (depth: number, from: number): void => {
+      available.fill(0);
+      for (let g = 0; g < groups.length; g += 1) {
+        if (needFrom[depth][g] === 0) continue;
+        const table = defsLeft[g];
+        const at = (g === slots[depth] ? from : 0) * setCount;
+        for (let k = 0; k < setCount; k += 1) available[k] += table[at + k];
+      }
+    };
     const boundAt = (depth: number, nextPos: number, pieces: { sets: string[]; counts: number[] }): Float64Array => {
       const v = scratch;
       v.set(acc[depth]);
-      const remaining = 5 - depth;
       for (let g = 0; g < groups.length; g += 1) {
         const need = needFrom[depth][g];
         if (need === 0) continue;
         const from = g === slots[depth] ? nextPos : 0;
         addInto(v, topSum[g][from][need]);
       }
-      for (let k = 0; k < pieces.sets.length; k += 1) {
-        const gain = gainOf(pieces.sets[k], pieces.counts[k] + remaining);
-        if (gain) addInto(v, gain);
-      }
-      addInto(v, newSetGain[remaining]);
+      countAvailable(depth, nextPos);
+      addSetBound(v, pieces, 5 - depth);
       addInto(v, mainMax);
       return v;
     };
@@ -830,17 +959,14 @@ function runPatternSearch(
       const v = scratch;
       v.set(acc[depth]);
       addInto(v, max);
-      const remaining = 5 - depth;
       for (let h = 0; h < groups.length; h += 1) {
         const need = h === g ? needFrom[depth][h] - 1 : needFrom[depth][h];
         if (need === 0) continue;
         addInto(v, topSum[h][h === g ? p + 1 : 0][need]);
       }
-      for (let k = 0; k < pieces.sets.length; k += 1) {
-        const gain = gainOf(pieces.sets[k], pieces.counts[k] + remaining);
-        if (gain) addInto(v, gain);
-      }
-      addInto(v, newSetGain[remaining]);
+      // The children and later slots of their group all come from p on.
+      countAvailable(depth, p);
+      addSetBound(v, pieces, 5 - depth);
       addInto(v, mainMax);
       return v;
     };
@@ -876,6 +1002,21 @@ function runPatternSearch(
       if (build !== null) board.insert({ build, key: combo.map((e) => indexOf.get(e)!) });
     };
 
+    // Shard units are (first echo, second echo) pairs, dealt by position so
+    // every shard agrees without sharing state: depth 0 is never cut, so
+    // `unit` (its running count) is the same in every shard.
+    const owned = (depth: number, q: number): boolean =>
+      depth !== 1 || (unit + q) % shard.count === shard.index;
+    /** Covers the units this shard owns under a depth-1 node that was cut. */
+    const coverOwned = (nextPos: number): void => {
+      const g = slots[1];
+      const end = groups[g].length - needFrom[2][g];
+      const nextGroupStarts = slots[2] !== g;
+      for (let q = slots[0] === g ? nextPos : 0; q < end; q += 1) {
+        if (owned(1, q)) cover(leavesBelow(2, nextGroupStarts ? 0 : q + 1));
+      }
+    };
+
     const descend = (depth: number, nextPos: number): void => {
       if (depth === 5) {
         cover(1);
@@ -884,12 +1025,9 @@ function runPatternSearch(
       }
       const pieces = distinctPieces(chosen);
       if (depth > 0) {
-        if (lockNeed(pieces, lock) > 5 - depth) {
-          cover(leavesBelow(depth, nextPos));
-          return;
-        }
-        if (useBounds && unreachable(boundAt(depth, nextPos, pieces))) {
-          cover(leavesBelow(depth, nextPos));
+        if (lockNeed(pieces, lock) > 5 - depth || (useBounds && unreachable(boundAt(depth, nextPos, pieces)))) {
+          if (depth === 1) coverOwned(nextPos);
+          else cover(leavesBelow(depth, nextPos));
           return;
         }
       }
@@ -900,12 +1038,12 @@ function runPatternSearch(
       const start = depth > 0 && slots[depth - 1] === g ? nextPos : 0;
       const nextGroupStarts = depth + 1 < 5 && slots[depth + 1] !== g;
       const skipTo = (stop: number): void => {
-        for (; p < stop; p += 1) cover(leavesBelow(depth + 1, nextGroupStarts ? 0 : p + 1));
+        for (; p < stop; p += 1) if (owned(depth, p)) cover(leavesBelow(depth + 1, nextGroupStarts ? 0 : p + 1));
       };
       let p = start;
       while (p < end) {
         const stop = Math.min(chunkEnd[g][p], end);
-        // Depth 0 hands out shard units one echo at a time, so ranges start below it.
+        // Depth 0 is never cut (see `owned`), so ranges start below it.
         if (depth > 0 && useBounds) {
           // The rest of p's cluster, then p's chunk, as one bound each.
           const clusterStop = Math.min(clusterEnd[g][p], end);
@@ -919,10 +1057,8 @@ function runPatternSearch(
           }
         }
         for (; p < stop; p += 1) {
-          if (depth === 0) {
-            unit += 1;
-            if (unit % shard.count !== shard.index) continue;
-          }
+          if (depth === 0) unit += 1;
+          else if (!owned(depth, p)) continue;
           const echo = list[p];
           chosen.push(echo);
           acc[depth + 1].set(acc[depth]);

@@ -180,9 +180,18 @@ UI (React components)
     branch-and-bound over an additive decomposition derived from
     `computeStats` and verified at runtime. It must return exactly what
     `searchReference` (brute force) returns. `search.test.ts` holds a
-    seeded equivalence suite; keep it green for any search change.
+    seeded equivalence suite (including real-set inventories); keep it
+    green for any search change.
+    - The Sonata part of a bound (`addSetBound`) splits the remaining slots
+      among sets per stat, each set capped by the distinct defs it still
+      has among the remaining slots' candidates. Crediting every set's best
+      bonus everywhere made 37-set inventories 20–25x slower.
+    - The cut threshold starts at `seedFloor`, the N-th score of an exact
+      search over each cost's 8 best Echoes. It is only a threshold: its
+      combos are never inserted.
   - **Workers:** it runs in `defaultConcurrency` Web Workers as
-    deterministic shards (`SearchShard`), merged by `mergeShardResults`.
+    deterministic shards (`SearchShard`; units are first-two-Echo pairs
+    dealt by position), merged by `mergeShardResults`.
     Domain math stays in `src/domain`; the optimizer only adds and compares
     vectors `computeStats` produced. The progress tracker
     (`createProgressTracker`, `protocol.ts`) fires the search's opening
@@ -207,10 +216,10 @@ UI (React components)
     10 | 12` (the game caps at 10 before Data Bank upgrades, reference doc
     §2), and its tests cover both.
   - **Sonata lock tip:** the Calculator tells users with ≥ 100 candidate
-    Echoes and no 5-piece lock that a 5-piece lock is many times faster
-    (measured 11–25x on the bench's realistic inventory at n = 120–240;
-    2+2 only ~1.4–1.7x). No numbers in the UI. Re-measure if the search
-    changes.
+    Echoes and no 5-piece lock that a 5-piece lock is many times faster.
+    Re-measured after the Sonata-bound speedup on a 240-Echo dev-seed
+    inventory in Chromium: no lock 8.6 s, 5-piece 1.0 s, 2+2 2.6 s. No
+    numbers in the UI. Re-measure if the search changes.
 
     One dominator is unsound: several same-cost Echoes share a combo, and
     duplicate defs don't add Sonata pieces.

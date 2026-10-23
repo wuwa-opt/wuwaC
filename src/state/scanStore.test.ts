@@ -207,7 +207,7 @@ describe('video scans', () => {
       for (const [i, name] of names.entries()) {
         options.signal?.throwIfAborted();
         if (opts.failAfter === i) return Promise.reject(new Error('decoder died'));
-        options.onFrame(file(name), { start: i, end: i, pick: i });
+        options.onFrame(file(name), { start: i, end: i, pick: i, alt: null });
         options.onProgress?.(i + 1, names.length);
       }
       return Promise.resolve({ duration: names.length, segments: names.length });
@@ -227,7 +227,7 @@ describe('video scans', () => {
 
     const state = useScanStore.getState();
     expect(state.video).toBeNull();
-    expect(state.lastVideo).toEqual({ fileName: 'clip.mp4', found: 5, skipped: 1, cancelled: false, error: null });
+    expect(state.lastVideo).toEqual({ fileName: 'clip.mp4', found: 5, skipped: 1, reread: 0, improved: 0, cancelled: false, error: null });
     expect(state.items.map((it) => it.parse?.echo.echoDefId)).toEqual([
       'reminiscence-fleurdelys',
       'reminiscence-fleurdelys',
@@ -238,6 +238,63 @@ describe('video scans', () => {
     expect(reviewRows(state.items, []).map((r) => r.repeatOf)).toEqual([null, null, null, null, 2]);
   });
 
+  it('re-reads a flagged panel from its second frame and keeps the better read', async () => {
+    // v2-seg47 (Forbidden Bastion) misses COST; its second frame here stands in as v2-seg46, which reads clean.
+    // v2-seg48 reads clean, so it gets no second look; v2-seg49 has no second frame.
+    const grabbed: number[] = [];
+    setScanDeps({
+      createReader: () => Promise.resolve(fakeReader),
+      thumbnail: () => Promise.resolve(null),
+      scanVideo: (_video, options) => {
+        options.onFrame(file('v2-seg47'), { start: 0, end: 1, pick: 0.2, alt: 1 });
+        options.onFrame(file('v2-seg48'), { start: 1.1, end: 2, pick: 1.3, alt: 2 });
+        options.onFrame(file('v2-seg49'), { start: 2.1, end: 2.2, pick: 2.2, alt: null });
+        return Promise.resolve({ duration: 3, segments: 3 });
+      },
+      openGrabber: () =>
+        Promise.resolve({
+          grab: (t: number) => {
+            grabbed.push(t);
+            return Promise.resolve(file(t === 1 ? 'v2-seg46' : 'v2-seg47'));
+          },
+          close: () => undefined,
+        }),
+    });
+    const store = useScanStore.getState();
+    store.setBatch({ sonataId: 'song-of-feathered-trace' });
+    await store.addVideo(file('clip.mp4'));
+    const { items, lastVideo } = useScanStore.getState();
+    expect(grabbed).toEqual([1]);
+    expect(items[0].parse?.flags).toEqual([]);
+    expect(lastVideo).toMatchObject({ found: 3, reread: 1, improved: 1 });
+  });
+
+  it('keeps the first read when the second frame is no better, or cannot be had', async () => {
+    let fail = false;
+    setScanDeps({
+      createReader: () => Promise.resolve(fakeReader),
+      thumbnail: () => Promise.resolve(null),
+      scanVideo: (_video, options) => {
+        options.onFrame(file('v2-seg47'), { start: 0, end: 1, pick: 0.2, alt: 1 });
+        return Promise.resolve({ duration: 1, segments: 1 });
+      },
+      openGrabber: () =>
+        Promise.resolve({
+          grab: () => (fail ? Promise.reject(new Error('seek failed')) : Promise.resolve(file('v2-seg47'))),
+          close: () => undefined,
+        }),
+    });
+    const store = useScanStore.getState();
+    store.setBatch({ sonataId: 'song-of-feathered-trace' });
+    await store.addVideo(file('clip.mp4'));
+    expect(useScanStore.getState().items[0].parse?.flags.map((f) => f.field)).toEqual(['cost']);
+    expect(useScanStore.getState().lastVideo).toMatchObject({ reread: 1, improved: 0 });
+    fail = true;
+    store.clear();
+    await store.addVideo(file('clip.mp4'));
+    expect(useScanStore.getState().items[0].parse?.flags.map((f) => f.field)).toEqual(['cost']);
+  });
+
   it('cancels between frames and keeps what was already found', async () => {
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => (release = resolve));
@@ -245,10 +302,10 @@ describe('video scans', () => {
       createReader: () => Promise.resolve(fakeReader),
       thumbnail: () => Promise.resolve(null),
       scanVideo: async (_video, options) => {
-        options.onFrame(file('vid-seg03'), { start: 0, end: 0, pick: 0 });
+        options.onFrame(file('vid-seg03'), { start: 0, end: 0, pick: 0, alt: null });
         await gate;
         options.signal?.throwIfAborted();
-        options.onFrame(file('vid-seg04'), { start: 1, end: 1, pick: 1 });
+        options.onFrame(file('vid-seg04'), { start: 1, end: 1, pick: 1, alt: null });
         return { duration: 2, segments: 2 };
       },
     });
@@ -260,7 +317,7 @@ describe('video scans', () => {
     useScanStore.getState().cancelVideo();
     release();
     await running;
-    expect(useScanStore.getState().lastVideo).toEqual({ fileName: 'clip.mp4', found: 1, skipped: 0, cancelled: true, error: null });
+    expect(useScanStore.getState().lastVideo).toEqual({ fileName: 'clip.mp4', found: 1, skipped: 0, reread: 0, improved: 0, cancelled: true, error: null });
     expect(useScanStore.getState().items).toHaveLength(1);
   });
 
@@ -273,7 +330,7 @@ describe('video scans', () => {
     const store = useScanStore.getState();
     store.setBatch({ sonataId: 'windward-pilgrimage' });
     await store.addVideo(file('broken.mkv'));
-    expect(useScanStore.getState().lastVideo).toEqual({ fileName: 'broken.mkv', found: 1, skipped: 0, cancelled: false, error: 'decoder died' });
+    expect(useScanStore.getState().lastVideo).toEqual({ fileName: 'broken.mkv', found: 1, skipped: 0, reread: 0, improved: 0, cancelled: false, error: 'decoder died' });
   });
 
   it('treats a parse with no name, cost or main stat as panel-less — and only that', () => {

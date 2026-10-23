@@ -58,6 +58,9 @@ function bindOcr(worker: Worker, image: Blob, bitmap: ImageBitmap): OcrFn {
     await worker.setParameters({
       tessedit_pageseg_mode: mode === 'sparse' ? PSM.SPARSE_TEXT : mode === 'line' || mode === 'tag' ? PSM.SINGLE_LINE : PSM.SINGLE_BLOCK,
       tessedit_char_whitelist: mode === 'digits' ? '0123456789.%' : '',
+      // A canvas crop carries no DPI, and tesseract logs "Estimating resolution" to the
+      // console for each one. A fixed DPI left all 62 tag and 22 grid-bar fixture reads unchanged.
+      user_defined_dpi: mode === 'tag' ? '300' : '',
     });
     if (mode !== 'tag') {
       const { data } = await worker.recognize(image, { rectangle: rect }, { blocks: true });

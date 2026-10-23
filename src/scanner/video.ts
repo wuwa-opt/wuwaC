@@ -18,6 +18,14 @@
  *     true 16.
  * Revisiting an Echo (A → B → A) yields A twice; the review step flags
  * repeats (review.ts), this module does not try to remember panels.
+ *
+ * The in-game Filter sheet covers the panel with a dark overlay. Its frames
+ * (and the blends while it fades in and out) are not panels: measured on
+ * the 2026-10-23 recording, the stat block's mean luminance is 94.6–117.1
+ * on every real panel (84, both recordings and the screenshots), 33.9–63.2
+ * on blends and 30.5–41.4 on the sheet. `showsPanel` cuts at 75 — nearer
+ * the blends, since dropping a real panel would lose an Echo, while a blend
+ * let through is only a flagged row.
  */
 
 export interface GrayFrame {
@@ -45,6 +53,9 @@ export const NAME_REGION: BandRegion = { x0: 0, x1: 0.55, y0: 0.04, y1: 0.1 };
 export const STATS_REGION: BandRegion = { x0: 0, x1: 1, y0: 0.47, y1: 0.9 };
 
 export const CHANGE_THRESHOLD = 2.5;
+
+/** Mean luminance of the stat block below which a sample shows no panel (the Filter sheet). */
+export const PANEL_MIN_LUMA = 75;
 
 /** RGBA (canvas ImageData) -> luminance, integer BT.601 weights. */
 export function toGray(rgba: Uint8ClampedArray, width: number, height: number): GrayFrame {
@@ -74,6 +85,21 @@ export function regionDiff(a: GrayFrame, b: GrayFrame, region: BandRegion): numb
   return count === 0 ? 0 : sum / count;
 }
 
+function regionMean(frame: GrayFrame, region: BandRegion): number {
+  const xs = Math.floor(region.x0 * frame.width);
+  const xe = Math.floor(region.x1 * frame.width);
+  const ys = Math.floor(region.y0 * frame.height);
+  const ye = Math.floor(region.y1 * frame.height);
+  let sum = 0;
+  for (let y = ys; y < ye; y++) for (let x = xs; x < xe; x++) sum += frame.data[y * frame.width + x];
+  return sum / Math.max(1, (xe - xs) * (ye - ys));
+}
+
+/** Is an Echo panel showing, rather than the dark Filter sheet (or a blend into it)? */
+export function showsPanel(frame: GrayFrame): boolean {
+  return regionMean(frame, STATS_REGION) >= PANEL_MIN_LUMA;
+}
+
 /** Did the panel's text change between two samples? */
 export function panelChanged(a: GrayFrame, b: GrayFrame, threshold = CHANGE_THRESHOLD): boolean {
   return regionDiff(a, b, STATS_REGION) > threshold || regionDiff(a, b, NAME_REGION) > threshold;
@@ -85,7 +111,20 @@ export interface Segment {
   end: number;
   /** The sample to OCR (see `SETTLE_SECONDS`); its frame was captured by the caller. */
   pick: number;
+  /**
+   * A second frame of the same panel to re-read when the pick's read is
+   * flagged: the last sample, when at least `ALT_MIN_GAP` after the pick
+   * (the art animates, so it may uncover a name or COST); else null.
+   */
+  alt: number | null;
 }
+
+/**
+ * Least distance between the pick and the second frame. Measured on 62
+ * panels of both recordings: re-reading the last sample of a flagged
+ * panel took wrong fields from 2 to 0 and flagged rows from 17 to 14.
+ */
+export const ALT_MIN_GAP = 0.3;
 
 /**
  * How far into a panel the OCR'd frame should be. The text switches in one
@@ -119,7 +158,8 @@ export interface Segmenter {
  * frames this flags as it goes. Every stable stretch becomes a segment —
  * even a single sample: dropping short ones would lose fast clicks
  * silently, while an extra segment costs only one OCR (a repeat is
- * flagged in review).
+ * flagged in review). A sample that shows no panel (`showsPanel`) closes
+ * the open segment and starts none, so the Filter sheet is never emitted.
  */
 export function createSegmenter(threshold = CHANGE_THRESHOLD, settle = SETTLE_SECONDS): Segmenter {
   let last: GrayFrame | null = null;
@@ -131,10 +171,14 @@ export function createSegmenter(threshold = CHANGE_THRESHOLD, settle = SETTLE_SE
   const close = (): Segment | null => {
     if (!open) return null;
     open = false;
-    return { start, end, pick };
+    return { start, end, pick, alt: end - pick >= ALT_MIN_GAP - 1e-6 ? end : null };
   };
   return {
     push: (t, frame) => {
+      if (!showsPanel(frame)) {
+        last = null;
+        return { closed: close(), capture: false };
+      }
       const closed = last !== null && panelChanged(last, frame, threshold) ? close() : null;
       last = frame;
       if (!open) {

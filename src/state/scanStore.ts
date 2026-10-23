@@ -2,9 +2,10 @@ import { create } from 'zustand';
 import type { ScanDraft } from '../scanner/draft.ts';
 import { screenshotProblem } from '../scanner/imageLimits.ts';
 import type { FrameReader } from '../scanner/engine.ts';
-import { isPanelless, parsePanel, type ScanBatch } from '../scanner/parse.ts';
+import { isPanelless, parsePanel, type PanelParse, type ScanBatch } from '../scanner/parse.ts';
+import { parseCost } from '../scanner/pipeline.ts';
 import type { ScanItem } from '../scanner/review.ts';
-import type { VideoScanOptions, VideoScanResult } from '../scanner/videoFrames.ts';
+import type { FrameGrabber, VideoScanOptions, VideoScanResult } from '../scanner/videoFrames.ts';
 import { useSnapshotStore } from './snapshotStore.ts';
 
 /**
@@ -36,6 +37,8 @@ export interface ScanDeps {
   validate?: (image: File) => Promise<string | null>;
   /** Walk a screen recording, emitting one frame per settled panel (absent = no video support). */
   scanVideo?: (video: File, options: VideoScanOptions) => Promise<VideoScanResult>;
+  /** Second frames of a recording for flagged panels (absent = none). */
+  openGrabber?: (video: File) => Promise<FrameGrabber>;
 }
 
 const browserDeps: ScanDeps = {
@@ -52,6 +55,10 @@ const browserDeps: ScanDeps = {
   scanVideo: async (video, options) => {
     const { scanVideo } = await import('../scanner/videoFrames.ts');
     return scanVideo(video, options);
+  },
+  openGrabber: async (video) => {
+    const { openFrameGrabber } = await import('../scanner/videoFrames.ts');
+    return openFrameGrabber(video);
   },
 };
 
@@ -82,6 +89,9 @@ export interface VideoOutcome {
   found: number;
   /** Frames that turned out to show no Echo panel (dropped). */
   skipped: number;
+  /** Flagged panels re-read from a later frame, and how many of those read better. */
+  reread: number;
+  improved: number;
   cancelled: boolean;
   error: string | null;
 }
@@ -152,33 +162,75 @@ export const useScanStore = create<ScanState>()((set, get) => {
     return reader;
   };
 
-  const readOne = async (id: string, image: File, batch: ScanBatch): Promise<void> => {
+  /** Latest image whose preview an item should show (a re-read can replace the first). */
+  const thumbFor = new Map<string, Blob>();
+  const setThumb = (id: string, image: Blob): void => {
+    thumbFor.set(id, image);
+    void deps
+      .thumbnail(image)
+      .then((thumbUrl) => {
+        if (thumbUrl === null) return;
+        const item = get().items.find((it) => it.id === id);
+        if (item === undefined || thumbFor.get(id) !== image) {
+          URL.revokeObjectURL(thumbUrl);
+          return;
+        }
+        if (item.thumbUrl !== null) URL.revokeObjectURL(item.thumbUrl);
+        patchItem(id, { thumbUrl });
+      })
+      .catch(() => undefined);
+  };
+
+  /**
+   * OCR + parse one image. `second` (video only) gives a later frame of
+   * the same panel: when the first read is flagged, that frame is read
+   * too and its parse kept only if `parseCost` strictly drops — the same
+   * rule as pass 5, so it adds no trust of its own.
+   */
+  const readOne = async (
+    id: string,
+    image: File,
+    batch: ScanBatch,
+    second?: () => Promise<File>,
+  ): Promise<'first' | 'second' | 'kept'> => {
     // A refused file fails on its own row; the rest of the batch carries on.
     try {
       const problem = (await deps.validate?.(image)) ?? null;
       if (problem !== null) {
         patchItem(id, { status: 'failed', error: problem });
-        return;
+        return 'first';
       }
     } catch (err) {
       patchItem(id, { status: 'failed', error: err instanceof Error ? err.message : 'Could not check this image.' });
-      return;
+      return 'first';
     }
-    void deps
-      .thumbnail(image)
-      .then((thumbUrl) => {
-        if (thumbUrl === null) return;
-        if (get().items.some((it) => it.id === id)) patchItem(id, { thumbUrl });
-        else URL.revokeObjectURL(thumbUrl);
-      })
-      .catch(() => undefined);
+    setThumb(id, image);
     try {
       const read = await ensureReader();
       const snapshot = useSnapshotStore.getState().snapshot;
-      const { parse } = await read(image, (words, extras) => parsePanel(words, batch, snapshot, extras));
+      const parseFn = (words: Parameters<typeof parsePanel>[0], extras?: Parameters<typeof parsePanel>[3]) => parsePanel(words, batch, snapshot, extras);
+      let parse: PanelParse = (await read(image, parseFn)).parse;
+      let outcome: 'first' | 'second' | 'kept' = 'first';
+      // Sonata flags come from the filter tag, not the panel: another frame cannot help them.
+      if (second !== undefined && parse.flags.some((f) => f.field !== 'sonata') && !isPanelless(parse)) {
+        outcome = 'kept';
+        try {
+          const later = await second();
+          const reread = (await read(later, parseFn)).parse;
+          if (parseCost(reread) < parseCost(parse)) {
+            parse = reread;
+            outcome = 'second';
+            setThumb(id, later);
+          }
+        } catch {
+          // No second frame: the first read stands, flags and all.
+        }
+      }
       patchItem(id, { status: 'done', parse });
+      return outcome;
     } catch (err) {
       patchItem(id, { status: 'failed', error: err instanceof Error ? err.message : 'Could not read this image.' });
+      return 'first';
     }
   };
 
@@ -220,7 +272,8 @@ export const useScanStore = create<ScanState>()((set, get) => {
       const abort = new AbortController();
       videoAbort = abort;
       const ids: string[] = [];
-      const reads: Promise<void>[] = [];
+      const reads: Promise<'first' | 'second' | 'kept'>[] = [];
+      const grabber = deps.openGrabber === undefined ? null : await deps.openGrabber(file).catch(() => null);
       let cancelled = false;
       let error: string | null = null;
       set({ video: { fileName: file.name, t: 0, duration: 0, found: 0 }, lastVideo: null });
@@ -228,11 +281,12 @@ export const useScanStore = create<ScanState>()((set, get) => {
         await walk(file, {
           signal: abort.signal,
           onProgress: (t, duration) => set((s) => (s.video === null ? {} : { video: { ...s.video, t, duration } })),
-          onFrame: (frame) => {
+          onFrame: (frame, segment) => {
             const item = newItem(frame.name, batch);
             ids.push(item.id);
             set((s) => ({ items: [...s.items, item], video: s.video === null ? null : { ...s.video, found: s.video.found + 1 } }));
-            reads.push(readOne(item.id, frame, batch));
+            const alt = segment.alt;
+            reads.push(readOne(item.id, frame, batch, grabber === null || alt === null ? undefined : () => grabber.grab(alt)));
           },
         });
       } catch (err) {
@@ -241,10 +295,16 @@ export const useScanStore = create<ScanState>()((set, get) => {
       } finally {
         videoAbort = null;
       }
-      await Promise.all(reads);
+      const outcomes = await Promise.all(reads);
+      grabber?.close();
+      const reread = outcomes.filter((o) => o !== 'first').length;
+      const improved = outcomes.filter((o) => o === 'second').length;
       const panelless = get().items.filter((it) => ids.includes(it.id) && it.parse !== undefined && isPanelless(it.parse));
       get().clear(panelless.map((it) => it.id));
-      set({ video: null, lastVideo: { fileName: file.name, found: ids.length - panelless.length, skipped: panelless.length, cancelled, error } });
+      set({
+        video: null,
+        lastVideo: { fileName: file.name, found: ids.length - panelless.length, skipped: panelless.length, reread, improved, cancelled, error },
+      });
     },
 
     cancelVideo: () => videoAbort?.abort(),
@@ -271,6 +331,7 @@ export const useScanStore = create<ScanState>()((set, get) => {
     clear: (ids) => {
       const drop = ids === undefined ? get().items : get().items.filter((it) => ids.includes(it.id));
       release(drop);
+      for (const it of drop) thumbFor.delete(it.id);
       const dropIds = new Set(drop.map((it) => it.id));
       set((s) => ({ items: s.items.filter((it) => !dropIds.has(it.id)) }));
     },

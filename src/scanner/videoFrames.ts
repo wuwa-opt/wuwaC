@@ -113,6 +113,18 @@ function context(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
   return ctx;
 }
 
+/**
+ * Paint the frame `video` shows onto `ctx` as the scanner's OCR frame:
+ * full size, black except the panel band and the filter tag.
+ */
+function paintScanFrame(ctx: CanvasRenderingContext2D, video: HTMLVideoElement, width: number, height: number): void {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, width, height);
+  for (const r of [panelRect(width, height), filterTagRect(width, height)]) {
+    ctx.drawImage(video, r.left, r.top, r.width, r.height, r.left, r.top, r.width, r.height);
+  }
+}
+
 function timeLabel(t: number): string {
   const m = Math.floor(t / 60);
   const s = (t - m * 60).toFixed(1).padStart(4, '0');
@@ -223,7 +235,6 @@ export async function scanVideo(file: File, options: VideoScanOptions): Promise<
     }
 
     const band = panelRect(width, height);
-    const tag = filterTagRect(width, height);
     const small = document.createElement('canvas');
     small.width = SIGNATURE_WIDTH;
     small.height = SIGNATURE_HEIGHT;
@@ -254,11 +265,7 @@ export async function scanVideo(file: File, options: VideoScanOptions): Promise<
       const { data } = smallCtx.getImageData(0, 0, SIGNATURE_WIDTH, SIGNATURE_HEIGHT);
       const { closed, capture } = segmenter.push(t, toGray(data, SIGNATURE_WIDTH, SIGNATURE_HEIGHT));
       if (closed !== null) emit(closed);
-      if (capture) {
-        pickCtx.fillStyle = '#000';
-        pickCtx.fillRect(0, 0, width, height);
-        for (const r of [band, tag]) pickCtx.drawImage(video, r.left, r.top, r.width, r.height, r.left, r.top, r.width, r.height);
-      }
+      if (capture) paintScanFrame(pickCtx, video, width, height);
       lastT = t;
       onProgress?.(t, duration);
     };
@@ -296,4 +303,56 @@ export async function scanVideo(file: File, options: VideoScanOptions): Promise<
     video.load();
     URL.revokeObjectURL(url);
   }
+}
+
+/** Second frames on demand (Segment.alt), from their own <video> so the walk is never disturbed. */
+export interface FrameGrabber {
+  /** The scan frame at video time `t` (same masking and naming as the walk's frames). */
+  grab: (t: number) => Promise<File>;
+  close: () => void;
+}
+
+/**
+ * Open `file` a second time for re-reads of flagged panels. Each grab is
+ * one seek (~0.13 s on the user's H.264 recordings) plus a PNG encode, and
+ * only flagged rows ask, so the walk itself pays nothing. Grabs run one at
+ * a time on this element.
+ */
+export async function openFrameGrabber(file: File): Promise<FrameGrabber> {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement('video');
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = 'auto';
+  const close = (): void => {
+    video.removeAttribute('src');
+    video.load();
+    URL.revokeObjectURL(url);
+  };
+  try {
+    const loaded = once(video, 'loadeddata');
+    video.src = url;
+    await loaded;
+  } catch (err) {
+    close();
+    throw err;
+  }
+  const { videoWidth: width, videoHeight: height } = video;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = context(canvas);
+  let queue: Promise<unknown> = Promise.resolve();
+  const grab = (t: number): Promise<File> => {
+    const job = queue.then(async () => {
+      await seek(video, t);
+      paintScanFrame(ctx, video, width, height);
+      const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (png === null) throw new Error('Could not capture a frame from the video.');
+      return new File([png], `${file.name} @ ${timeLabel(t)}.png`, { type: 'image/png' });
+    });
+    queue = job.catch(() => undefined);
+    return job;
+  };
+  return { grab, close };
 }

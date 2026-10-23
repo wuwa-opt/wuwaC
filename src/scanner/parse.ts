@@ -302,11 +302,15 @@ export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot
   const header = costIndex >= 0 ? rows.slice(0, costIndex) : rows;
 
   // Name.
-  // "Phantom: X" is a cosmetic variant of X (same Echo, same stats; user-confirmed 2026-10-23).
-  const nameVocab: VocabEntry<EchoDefData>[] = snapshot.echoDefs.flatMap((d) => [
-    { text: d.name, value: d },
-    { text: `${PHANTOM_PREFIX}${d.name}`, value: d },
-  ]);
+  // "Phantom: X" is a cosmetic variant of X (same Echo, same stats;
+  // user-confirmed 2026-10-23). The span search finds an exact "X" inside
+  // it; the full "Phantom: X" names also let a damaged read match
+  // approximately ("Phantom: Iceglint Dag"). They are only added when a
+  // header row says "Phantom": doubling the list doubles the match cost.
+  const phantom = header.some((r) => /\bphantom\b/.test(canonical(r.text)));
+  const nameVocab: VocabEntry<EchoDefData>[] = snapshot.echoDefs.flatMap((d) =>
+    phantom ? [{ text: d.name, value: d }, { text: `Phantom: ${d.name}`, value: d }] : [{ text: d.name, value: d }],
+  );
   let def: EchoDefData | null = null;
   let bestName: Scored<EchoDefData> | null = null;
   let nameIndex = -1;
@@ -497,9 +501,6 @@ export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot
     flags,
   };
 }
-
-/** Cosmetic variant prefix on some Echo names ("Phantom: Forbidden Bastion"). */
-const PHANTOM_PREFIX = 'Phantom: ';
 
 /**
  * A frame shows no Echo panel when the parser recognized none of name,

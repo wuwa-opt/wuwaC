@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadBundledSnapshot } from '../data/index.ts';
 import type { StatKey } from '../data/schema.ts';
 import fixtures from './fixtures/panels.json';
-import { groupRows, parsePanel, resolveCharacter, textLineBox, type OcrWord, type PanelExtras, type ScanBatch, type ScanField } from './parse.ts';
+import { groupRows, parsePanel, resolveCharacter, textLineBox, type OcrWord, type PanelExtras, type PanelParse, type ScanBatch, type ScanField } from './parse.ts';
 
 const snapshot = loadBundledSnapshot();
 
@@ -355,10 +355,21 @@ function expectedSonata(expected: Expected): string | null {
 /** As the app reads by default: no set picked; the tag and gold line come from the pipeline. */
 const NO_PICK: ScanBatch = { sonataId: null, rarity: 5 };
 
+/** Each fixture is parsed once per file (~20 ms each): the whole-set tests below reuse the reads. */
+const parsedFixtures = new Map<string, PanelParse>();
+function parseFixture(name: string, p: Panel): PanelParse {
+  let parsed = parsedFixtures.get(name);
+  if (parsed === undefined) {
+    parsed = parsePanel(p.words, NO_PICK, snapshot, p.extras);
+    parsedFixtures.set(name, parsed);
+  }
+  return parsed;
+}
+
 describe('parsePanel on 84 real OCR reads (tesseract.js 7: 17 screenshots, 16 + 51 frames of two recordings)', () => {
-  it.each(panels)('%s: every wrong field is flagged (zero silent errors)', (_name, panel) => {
+  it.each(panels)('%s: every wrong field is flagged (zero silent errors)', (name, panel) => {
     const def = fixtureDef(panel.expected);
-    const { echo, flags } = parsePanel(panel.words, NO_PICK, snapshot, panel.extras);
+    const { echo, flags } = parseFixture(name, panel);
     const flagged = new Set(flags.map((f) => f.field));
     const wrongAndSilent: string[] = [];
     const check = (field: ScanField, ok: boolean): void => {
@@ -382,7 +393,7 @@ describe('parsePanel on 84 real OCR reads (tesseract.js 7: 17 screenshots, 16 + 
 
   it('reads every filter tag in the fixtures exactly, and finds no tag where none is shown', () => {
     for (const [name, p] of panels) {
-      const { echo, flags } = parsePanel(p.words, NO_PICK, snapshot, p.extras);
+      const { echo, flags } = parseFixture(name, p);
       if (p.expected.filterTag !== null) {
         expect([name, echo.sonataId, flags.filter((f) => f.field === 'sonata')]).toEqual([name, expectedSonata(p.expected), []]);
       }
@@ -396,7 +407,7 @@ describe('parsePanel on 84 real OCR reads (tesseract.js 7: 17 screenshots, 16 + 
     // start), 14 approximate names, 3 COST misses, and one each of: a
     // missed substat row, a misread DEF value, a Rover choice — some
     // panels carry two.
-    const clean = panels.filter(([, p]) => parsePanel(p.words, NO_PICK, snapshot, p.extras).flags.length === 0);
+    const clean = panels.filter(([name, p]) => parseFixture(name, p).flags.length === 0);
     expect(clean).toHaveLength(52);
   });
 

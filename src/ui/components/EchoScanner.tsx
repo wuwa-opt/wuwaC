@@ -247,6 +247,7 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
             {[
               `${lastVideo.fileName}: ${lastVideo.found} Echo ${lastVideo.found === 1 ? 'panel' : 'panels'} found`,
               lastVideo.skipped > 0 ? `${lastVideo.skipped} ${lastVideo.skipped === 1 ? 'frame' : 'frames'} without an Echo panel skipped` : null,
+              lastVideo.improved > 0 ? `${lastVideo.improved} read better from a later frame` : null,
               lastVideo.cancelled ? 'cancelled' : null,
               lastVideo.error,
             ]

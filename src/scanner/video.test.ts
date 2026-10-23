@@ -4,8 +4,10 @@ import {
   gapFillTimes,
   NAME_REGION,
   panelChanged,
+  PANEL_MIN_LUMA,
   regionDiff,
   sampleTimes,
+  showsPanel,
   STATS_REGION,
   toGray,
   type BandRegion,
@@ -83,10 +85,11 @@ describe('createSegmenter', () => {
       null,
       null,
       null,
-      { start: 0, end: 0.30000000000000004, pick: 0.2 },
-      { start: 0.4, end: 0.4, pick: 0.4 },
+      // 0.1 s from pick to end: too close for a second frame.
+      { start: 0, end: 0.30000000000000004, pick: 0.2, alt: null },
+      { start: 0.4, end: 0.4, pick: 0.4, alt: null },
     ]);
-    expect(seg.finish()).toEqual({ start: 0.5, end: 0.5, pick: 0.5 });
+    expect(seg.finish()).toEqual({ start: 0.5, end: 0.5, pick: 0.5, alt: null });
     expect(seg.finish()).toBeNull();
   });
 
@@ -101,9 +104,38 @@ describe('createSegmenter', () => {
 
   it('keeps a one-sample segment (a fast click is never dropped)', () => {
     const seg = createSegmenter();
-    seg.push(0, frame(0));
-    expect(seg.push(0.1, frame(200)).closed).toEqual({ start: 0, end: 0, pick: 0 });
-    expect(seg.push(0.2, frame(0)).closed).toEqual({ start: 0.1, end: 0.1, pick: 0.1 });
+    seg.push(0, frame(90));
+    expect(seg.push(0.1, frame(200)).closed).toEqual({ start: 0, end: 0, pick: 0, alt: null });
+    expect(seg.push(0.2, frame(90)).closed).toEqual({ start: 0.1, end: 0.1, pick: 0.1, alt: null });
+  });
+
+  it('offers the last sample as a second frame when it is 0.3 s or more after the pick', () => {
+    const seg = createSegmenter();
+    for (const t of [0, 0.1, 0.2, 0.3, 0.4, 0.5]) seg.push(t, a);
+    // Pick 0.2, last sample 0.5: 0.3 apart (within float tolerance).
+    expect(seg.push(0.6, b).closed).toEqual({ start: 0, end: 0.5, pick: 0.2, alt: 0.5 });
+  });
+
+  it('emits nothing for the dark Filter sheet: it closes the open panel and opens none', () => {
+    const seg = createSegmenter();
+    const sheet = frame(35);
+    seg.push(0, a);
+    const covered = seg.push(0.1, sheet);
+    expect(covered).toEqual({ closed: { start: 0, end: 0, pick: 0, alt: null }, capture: false });
+    // Hovering the sheet's list changes it a lot, but nothing is emitted or captured.
+    expect(seg.push(0.2, frame(35, { region: STATS_REGION, value: 60 }))).toEqual({ closed: null, capture: false });
+    expect(seg.push(0.3, sheet)).toEqual({ closed: null, capture: false });
+    // The sheet closes: a new panel opens.
+    expect(seg.push(0.4, b).capture).toBe(true);
+    expect(seg.finish()).toEqual({ start: 0.4, end: 0.4, pick: 0.4, alt: null });
+  });
+});
+
+describe('showsPanel', () => {
+  it('needs a stat block at least as bright as 75 on average (panels measured ≥ 94.6, the sheet ≤ 63.2)', () => {
+    expect(PANEL_MIN_LUMA).toBe(75);
+    expect(showsPanel(frame(30, { region: STATS_REGION, value: 75 }))).toBe(true);
+    expect(showsPanel(frame(200, { region: STATS_REGION, value: 74 }))).toBe(false);
   });
 });
 

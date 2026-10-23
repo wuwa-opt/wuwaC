@@ -2,6 +2,15 @@
 
 Get the user's in-game Echo inventory (738 Echoes in the 2026-10-16 screenshot) into the app without hand entry. The app reads the game's **Echo Management** detail panel (name, `+level`, Sonata icon, COST, 2 main stats, up to 5 substats, "Equipped by X") from screen pixels, OCRs it in the browser, validates every value against the game's closed vocabularies and discrete roll tables, and stages the result for review before it touches `ownedEchoes`. Multi-session project. Each phase can be verified on its own and leaves the app working.
 
+## Status (2026-10-23, later): fewer reviews, 3× faster on filter switches
+
+- **Filter sheet never emitted:** the walk skips samples whose stat block is dark (mean luminance < 75; panels measured 94.6–117.1, blends ≤ 63.2, sheet ≤ 41.4). No PNG encode or OCR runs for them. Recording 2 went from ~145 s to 45–48 s, and the blend rows ("stats not validated", "level not read") are gone.
+- **Second frame:** a flagged video row re-reads its segment's last sample (when it's ≥ 0.3 s after the pick) from a second `<video>`, keeping it only if `parseCost` drops. Offline, over 62 panels: wrong fields 2 → 0, and 0 silent in 124 extra reads. In the browser, recording 1 is all Ready in 3/3 runs (the Kerasaur COST miss is fixed), and recording 2 has 2–3 rows read better per run.
+- **Browser, 3 runs each:** 0 silent. Recording 2 matched 45/46 truth rows. Its fix rows are 13/19 the unfiltered start (expected); the rest are first frames after the sheet closes (~1–2 per run).
+- **OCR workers:** 4 instead of 2 gained only 5–8%: the walk (video decode) is the limit now, so it stays at 2.
+- **Console:** tesseract's "Estimating resolution" log is down from 17 to 2 per run (a fixed DPI for the tag crops; tag reads unchanged, 62/62).
+- **Next (user, 2026-10-23):** a real batch of 100+ Echoes; then live capture together with an auto-advance helper (no clicking through the grid; plan Phase 6, ToS caveat); then rescan sync, where the scan wins over the app's `equippedTo`, with Undo.
+
 ## Status (2026-10-23): second recording, zero silent errors restored
 
 - **Sample:** the user's 117 s, 60 fps, 1914×1072 recording. It has five Sonata filters plus an unfiltered start, with the in-game Filter sheet opened between them: 47 panel visits, 45 distinct Echoes. Hand-read truth for 51 frames (`v2-seg*`) and the filter tag of all 84 truth frames are in `scan-fixtures/truth.json`. A Herdr helper agent did the reading; the parent spot-checked it by eye. Details: `.agents/plans/2026-10-23-scanner-video2/`.

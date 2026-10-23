@@ -406,7 +406,8 @@ interface Team {
   if `parseCost` drops — unread fields outrank flag counts), `draft.ts`,
   `review.ts` (owned Echoes and in-scan repeats start unticked), `video.ts`
   (panel-change detector: name line x < 0.55 + stat block, threshold 2.5,
-  measured on a real recording), `pixels.ts` (gold "Equipped by" check:
+  measured on a real recording; dark Filter-sheet samples, stat block mean
+  < 75, are never emitted; each segment offers a second frame `alt`), `pixels.ts` (gold "Equipped by" check:
   gold in the footer with no line read is an error flag whose row pass 5
   re-reads, plus the filter-tag box finder), `sonata.ts` (set per row).
   Browser-only: `engine.ts` (tesseract.js
@@ -419,8 +420,9 @@ interface Team {
     filter is set and the app's pick is NOT applied; only a region capture
     without that area uses the pick. An Echo that rolls one set needs
     neither. Rarity still comes from the batch.
-  - A frame whose pass 1 shows no panel (the in-game Filter sheet) stops
-    after pass 1. Same-roll rows that disagree on "Equipped by" start
+  - A frame whose pass 1 shows no panel stops after pass 1. A flagged
+    video row re-reads its segment's `alt` frame (`openFrameGrabber`, a
+    second <video>) and keeps it only if `parseCost` drops. Same-roll rows that disagree on "Equipped by" start
     unticked. "Phantom: X" is X (cosmetic, user-confirmed).
   OCR runtime is self-hosted under `ocr/<tesseract version>/` by the
   `ocrAssets` plugin in `vite.config.ts` (never precached, never a CDN;

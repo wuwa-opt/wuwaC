@@ -116,7 +116,7 @@ describe('EchoScanner', () => {
       // Desktop first (no panel), then Spectro -> Fusion -> Spectro again, as in the real recording.
       scanVideo: (_video: File, options: VideoScanOptions) => {
         ['desktop', 'vid-seg10', 'vid-seg11', 'vid-seg12'].forEach((name, i) => {
-          options.onFrame(png(name), { start: i, end: i, pick: i });
+          options.onFrame(png(name), { start: i, end: i, pick: i, alt: null });
           options.onProgress?.(i + 1, 4);
         });
         return Promise.resolve({ duration: 4, segments: 4 });

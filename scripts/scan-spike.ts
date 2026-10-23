@@ -84,6 +84,7 @@ async function main(): Promise<void> {
       await worker.setParameters({
         tessedit_pageseg_mode: mode === 'sparse' ? PSM.SPARSE_TEXT : mode === 'line' || mode === 'tag' ? PSM.SINGLE_LINE : PSM.SINGLE_BLOCK,
         tessedit_char_whitelist: mode === 'digits' ? '0123456789.%' : '',
+        user_defined_dpi: mode === 'tag' ? '300' : '',
       });
       if (mode === 'tag') {
         // Like the app: a crop of just the tag (engine.ts), always from the original frame.

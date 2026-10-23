@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { footerRect, labelColumnRect, panelRect, replaceWords, valueColumnRect } from './layout.ts';
+import { filterTagRect, footerRect, gridBarRect, labelColumnRect, panelRect, replaceWords, valueColumnRect } from './layout.ts';
 import type { OcrWord } from './parse.ts';
 
 function w(text: string, x0: number, y0: number, x1: number, y1: number): OcrWord {
@@ -24,6 +24,20 @@ const PASS1: OcrWord[] = [
   w('Echo', 1335, 830, 1400, 852),
   w('Skill', 1408, 830, 1470, 852),
 ];
+
+describe('filterTagRect', () => {
+  it('covers the filter tag and the grid bar under it: x 4–36%, y 80–95%', () => {
+    expect(filterTagRect(1920, 1080)).toEqual({ left: 77, top: 864, width: 614, height: 162 });
+    // The user's 1914×1072 recording: its measured tag box [183, 886, 592, 935] sits inside.
+    expect(filterTagRect(1914, 1072)).toEqual({ left: 77, top: 858, width: 612, height: 160 });
+  });
+});
+
+describe('gridBarRect', () => {
+  it('is the bottom of the tag area from y 88% ("Sort by Level")', () => {
+    expect(gridBarRect(1920, 1080)).toEqual({ left: 77, top: 950, width: 614, height: 76 });
+  });
+});
 
 describe('panelRect', () => {
   it('covers the right-hand 34% band, y 8–88%', () => {

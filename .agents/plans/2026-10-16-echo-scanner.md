@@ -2,6 +2,24 @@
 
 Get the user's in-game Echo inventory (738 Echoes in the 2026-10-16 screenshot) into the app without hand entry. The app reads the game's **Echo Management** detail panel (name, `+level`, Sonata icon, COST, 2 main stats, up to 5 substats, "Equipped by X") from screen pixels, OCRs it in the browser, validates every value against the game's closed vocabularies and discrete roll tables, and stages the result for review before it touches `ownedEchoes`. Multi-session project. Each phase can be verified on its own and leaves the app working.
 
+## Status (2026-10-23): second recording, zero silent errors restored
+
+- **Sample:** the user's 117 s, 60 fps, 1914×1072 recording. It has five Sonata filters plus an unfiltered start, with the in-game Filter sheet opened between them: 47 panel visits, 45 distinct Echoes. Hand-read truth for 51 frames (`v2-seg*`) and the filter tag of all 84 truth frames are in `scan-fixtures/truth.json`. A Herdr helper agent did the reading; the parent spot-checked it by eye. Details: `.agents/plans/2026-10-23-scanner-video2/`.
+- **It broke the gate:** 3 silent errors. On the first frame after the Filter sheet closes, the sheet's text is still faded over "Equipped by", OCR missed the line, and the Echo imported as unequipped. The review also ticked that copy and unticked the correct repeat.
+- **Fixes:**
+  - Gold-pixel check in the footer (`pixels.ts`). Measured on 84 panels: unequipped 0 px, equipped ≥ 464 px. Gold with no line read raises an error flag, and pass 5 re-reads the gold box: all 3 faded frames now read their wearer.
+  - Same-roll rows that disagree on the wearer both start unticked.
+  - Sonata per row from the in-game filter tag (`sonata.ts`; user decision: use the icon only if it can be identified confidently, otherwise the tag). The tag's dark box is found in pixels and read as one line: 62/62 exact. With no tag but the grid bar visible ("Sort by" read on 84/84 frames), no filter is set, and the app's pick is not applied.
+  - Panel-less frames (the Filter sheet) stop after pass 1: 137 of 141 sheet frames, and 0 of 84 real panels.
+  - The 4-cost Healing Bonus max is 26.4% (in-game, `v2-seg44`), not 26.0%.
+  - "Phantom: X" names match X (cosmetic; user-confirmed).
+- **Results** (`scan-eval js6`, no set picked, Sonata scored): 1088/1092 fields correct, **0 silent**, 52/84 panels need no review. The other 32: 16 multi-set Echoes with no filter set, 14 approximate names, 3 COST misses, and one each of a missed row, a misread value and a Rover choice. Committed fixtures now hold all 84.
+- **Browser (Chromium 155, no set picked, every row compared with truth incl. Sonata, `scan-fixtures/compare-e2e-v3.mjs`):**
+  - First recording, 11 runs: 0 silent, 15/15 Echoes in every run, Windward Pilgrimage read from the tag on every row. 12.8–15.4 s with the final build, against 12.7–13.7 s for `3c581c5` on the same day (the machine was slower than on 10-22).
+  - Second recording, 8 runs: 0 silent. 43–44 of 46 truth rows matched (a revisited Echo with a different Sonata counts twice). The misses are always flagged: Thousand-Puppet Pavilion's name covered by its art. The three faded frames read their wearer. ~145 s, against 141.5 s for `3c581c5`.
+  - **The walk, not OCR, sets the pace there:** while the Filter sheet is open, nearly every 0.1 s sample is a new segment, each PNG-encoded on the main thread, so the walk runs at ~1× real time. The early stop saves OCR work but not wall time. Next: recognise the sheet in the detector and emit nothing for it.
+- **Phase 4 correction:** the 2026-10-22 "16 panels, all Ready" below held in 1 of 10 runs. Typically one Kerasaur row carried a benign COST review, and 3 of 10 runs split a Sacerdos into an unticked repeat. Values were correct in all runs.
+
 ## Status (2026-10-22): Phase 4, video input
 
 - **Sample:** the user's 32.7 s, 60 fps, 1894×1062 H.264 recording, clicking through the Windward Pilgrimage filter at ~1 Echo/s: 16 panels, 15 distinct Echoes (one Spectro Drake visited twice). Hand-read truth is in `scan-fixtures/truth.json` (`vid-seg00`–`15`), and the frames are in `scan-fixtures/video/`.

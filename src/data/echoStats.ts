@@ -40,7 +40,10 @@ export const MAIN_STAT_RANGES: Record<1 | 3 | 4, Partial<Record<StatKey, StatRan
     defPct: { min: 0.083, max: 0.415 },
     critRate: { min: 0.044, max: 0.22 },
     critDmg: { min: 0.088, max: 0.44 },
-    healingBonus: { min: 0.052, max: 0.26 },
+    // Max: the reference says 26.0%, but the game shows 26.4% on a 5★ +25
+    // 4-cost (user's recording 2026-10-23, Thousand-Puppet Pavilion,
+    // frame scan-fixtures/video2/v2-seg44.png). Min 5.2% is unverified.
+    healingBonus: { min: 0.052, max: 0.264 },
   },
 };
 

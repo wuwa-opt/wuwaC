@@ -53,7 +53,7 @@ function formValues(row: ReviewRow): EchoFormValues {
   return {
     echoDefId: source?.echoDefId ?? echo?.echoDefId ?? '',
     label: '',
-    sonataId: row.item.batch.sonataId,
+    sonataId: source?.sonataId ?? echo?.sonataId ?? '',
     level: String(source?.level ?? echo?.level ?? 25),
     rarity: String(row.item.batch.rarity),
     mainStat: main ? { stat: main.stat, valueText: toDisplayValue(main.stat, main.value) } : { stat: 'atkPct', valueText: '' },
@@ -90,7 +90,7 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
 
   const rows = reviewRows(items, owned);
   const summary = summarize(rows);
-  const inBatch = items.filter((it) => it.batch.sonataId === batch.sonataId).length;
+  const inBatch = rows.filter((r) => (r.draft?.sonataId ?? r.item.parse?.echo.sonataId) === batch.sonataId).length;
 
   const add = (files: FileList | File[] | null): void => {
     const picked = Array.from(files ?? []);
@@ -146,19 +146,22 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
         className={dragging ? 'outline-2 outline-dashed outline-offset-4 outline-outline' : ''}
       >
         <ol className="list-decimal space-y-0.5 pl-5 text-sm text-fog">
-          <li>In game, open Echo Management → Filter, and pick one Sonata set (and 5-Star).</li>
-          <li>Choose the same set here — the panel shows the set only as an icon, so the filter is how it is known.</li>
           <li>
-            Click through the Echoes while recording the screen (or screenshot each one — the whole window, or a region
-            that includes the right-hand panel), then drop the recording or the images here. Pause about half a second on
-            each Echo.
+            In game, open Echo Management → Filter, and pick one Sonata set (and 5-Star). The panel shows the set only as
+            an icon, so the set is read from the filter's tag at the bottom left of the grid. You can change the filter
+            during a recording.
           </li>
+          <li>
+            Click through the Echoes while recording the whole game window (or screenshot each one), then drop the
+            recording or the images here. Pause about half a second on each Echo.
+          </li>
+          <li>Only if your pictures leave out the filter tag (a crop of the right-hand panel), pick the set here.</li>
         </ol>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem_10rem_auto] sm:items-end">
           <div>
             <label htmlFor="scan-sonata" className={labelClass}>
-              Sonata set (in-game filter)
+              Sonata set
             </label>
             <select
               id="scan-sonata"
@@ -166,7 +169,7 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
               onChange={(e) => setBatch({ sonataId: e.target.value })}
               className={inputClass}
             >
-              <option value="">Pick a set…</option>
+              <option value="">Read from the in-game filter</option>
               {snapshot.sonataSets.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
@@ -206,8 +209,7 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
           <div>
             <button
               type="button"
-              disabled={batch.sonataId === ''}
-              title={batch.sonataId === '' ? 'Pick the Sonata set first' : 'Choose screenshots or a screen recording to scan'}
+              title="Choose screenshots or a screen recording to scan"
               onClick={() => fileRef.current?.click()}
               className={btnPrimary}
             >
@@ -361,6 +363,7 @@ function ScanRow({
   const second = shown?.secondMainStat ?? echo?.secondMainStat ?? null;
   const subs = shown?.substats ?? echo?.substats ?? [];
   const equipped = shown?.equippedTo ?? echo?.equippedTo ?? null;
+  const sonataId = shown?.sonataId ?? echo?.sonataId ?? null;
   const flags = item.override === undefined ? item.parse?.flags ?? [] : [];
   const title = defId === null ? item.fileName : name(snapshot, 'echo', defId);
 
@@ -383,14 +386,22 @@ function ScanRow({
               </span>
             )}
             {level !== null && <span className="text-xs text-fog">{`+${level}`}</span>}
-            <span className="text-xs text-fog">{name(snapshot, 'sonata', item.batch.sonataId)}</span>
+            {item.status === 'done' && (
+              <span className="text-xs text-fog">{sonataId === null ? 'Sonata set ?' : name(snapshot, 'sonata', sonataId)}</span>
+            )}
             <span className={`text-xs font-bold ${STATE_CLASS[state]}`}>{STATE_LABEL[state]}</span>
             {row.known && <span className="text-xs text-fog">already in inventory</span>}
           </div>
-          {row.repeatOf !== null && (
+          {row.equipConflict ? (
             <p className="mt-1 text-xs text-amber">
-              {`Same rolls as #${row.repeatOf + 1} — probably clicked twice. Tick Add only if you own both.`}
+              Another row has the same rolls but a different “Equipped by”, so one of them was misread. Tick the right one.
             </p>
+          ) : (
+            row.repeatOf !== null && (
+              <p className="mt-1 text-xs text-amber">
+                {`Same rolls as #${row.repeatOf + 1} — probably clicked twice. Tick Add only if you own both.`}
+              </p>
+            )
           )}
 
           {item.status === 'failed' && <p className="mt-1 text-xs text-ember">{item.error}</p>}

@@ -39,6 +39,35 @@ export function panelRect(frameWidth: number, frameHeight: number): Rect {
   return { left, top, width: frameWidth - left, height: Math.round(frameHeight * 0.8) };
 }
 
+/**
+ * The in-game Sonata filter's tag (a dark chip with the set's name above
+ * the Filter button, bottom-left of the grid) and the grid's bottom bar
+ * under it ("Sort by Level", "Batch Manage"), which tells "no filter set"
+ * apart from "not in the picture" (sonata.ts). Measured 2026-10-23 on
+ * the user's two recordings (62 frames with a tag): the tag's dark box is
+ * 410×50 px at x 0.086–0.096 to 0.302–0.309, y 0.826–0.872 of the frame
+ * (it is anchored to the grid, so x shifts with how the window is framed);
+ * "Sort by Level" sits at y ≈ 0.905. The rectangle keeps a margin of at
+ * least 0.026 of the frame on every side.
+ */
+export function filterTagRect(frameWidth: number, frameHeight: number): Rect {
+  const left = Math.round(frameWidth * 0.04);
+  const top = Math.round(frameHeight * 0.8);
+  return { left, top, width: Math.round(frameWidth * 0.36) - left, height: Math.round(frameHeight * 0.95) - top };
+}
+
+/**
+ * The grid's bottom bar inside `filterTagRect` ("Sort by Level"), read
+ * when no tag is seen: present = the grid is in the picture with no
+ * filter set. Measured 2026-10-23: "Sort by" read on 84/84 frames (both
+ * recordings and the screenshots) in single-line mode.
+ */
+export function gridBarRect(frameWidth: number, frameHeight: number): Rect {
+  const area = filterTagRect(frameWidth, frameHeight);
+  const top = Math.round(frameHeight * 0.88);
+  return { left: area.left, top, width: area.width, height: area.top + area.height - top };
+}
+
 function bottom(r: Rect): number {
   return r.top + r.height;
 }

@@ -19,12 +19,12 @@ export const SCAN_ORIGIN = 'import:screen-scan';
  */
 export function toDraft({ echo, flags }: PanelParse): ScanDraft | null {
   if (flags.some((f) => f.severity === 'error')) return null;
-  const { echoDefId, cost, level, mainStat, secondMainStat, substats } = echo;
-  if (echoDefId === null || cost === null || level === null || mainStat === null || secondMainStat === null) return null;
+  const { echoDefId, sonataId, cost, level, mainStat, secondMainStat, substats } = echo;
+  if (echoDefId === null || sonataId === null || cost === null || level === null || mainStat === null || secondMainStat === null) return null;
   if (substats.some((s) => s === null)) return null;
   return {
     echoDefId,
-    sonataId: echo.sonataId,
+    sonataId,
     cost,
     level,
     rarity: echo.rarity,
@@ -76,7 +76,9 @@ export function markKnown(scanned: readonly (FingerprintInput | null)[], owned: 
 
 /** Helper for UIs: a ScannedEcho is complete enough to fingerprint. */
 export function scannedFingerprintInput(echo: ScannedEcho): FingerprintInput | null {
-  if (echo.echoDefId === null || echo.level === null || echo.mainStat === null || echo.substats.some((s) => s === null)) return null;
+  if (echo.echoDefId === null || echo.sonataId === null || echo.level === null || echo.mainStat === null || echo.substats.some((s) => s === null)) {
+    return null;
+  }
   return {
     echoDefId: echo.echoDefId,
     sonataId: echo.sonataId,

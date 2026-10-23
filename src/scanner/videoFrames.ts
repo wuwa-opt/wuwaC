@@ -1,4 +1,4 @@
-import { panelRect } from './layout.ts';
+import { filterTagRect, panelRect } from './layout.ts';
 import {
   createSegmenter,
   gapFillTimes,
@@ -32,8 +32,9 @@ import {
  *
  * The OCR frame of each panel is captured during the walk (the sample the
  * segmenter flags), so nothing is seeked twice. It keeps only the panel
- * band; the rest of the frame is painted black (PNG compresses it to
- * nothing, and nothing else on the user's screen enters the scan). Nothing
+ * band and the in-game filter tag (sonata.ts); the rest of the frame is
+ * painted black (PNG compresses it to nothing, and nothing else on the
+ * user's screen enters the scan). Nothing
  * of the recording is stored; the object URL is revoked when done.
  */
 
@@ -222,6 +223,7 @@ export async function scanVideo(file: File, options: VideoScanOptions): Promise<
     }
 
     const band = panelRect(width, height);
+    const tag = filterTagRect(width, height);
     const small = document.createElement('canvas');
     small.width = SIGNATURE_WIDTH;
     small.height = SIGNATURE_HEIGHT;
@@ -255,7 +257,7 @@ export async function scanVideo(file: File, options: VideoScanOptions): Promise<
       if (capture) {
         pickCtx.fillStyle = '#000';
         pickCtx.fillRect(0, 0, width, height);
-        pickCtx.drawImage(video, band.left, band.top, band.width, band.height, band.left, band.top, band.width, band.height);
+        for (const r of [band, tag]) pickCtx.drawImage(video, r.left, r.top, r.width, r.height, r.left, r.top, r.width, r.height);
       }
       lastT = t;
       onProgress?.(t, duration);

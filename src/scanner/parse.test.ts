@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadBundledSnapshot } from '../data/index.ts';
 import type { StatKey } from '../data/schema.ts';
 import fixtures from './fixtures/panels.json';
-import { groupRows, parsePanel, resolveCharacter, textLineBox, type OcrWord, type ScanBatch, type ScanField } from './parse.ts';
+import { groupRows, parsePanel, resolveCharacter, textLineBox, type OcrWord, type PanelExtras, type ScanBatch, type ScanField } from './parse.ts';
 
 const snapshot = loadBundledSnapshot();
 
@@ -222,11 +222,15 @@ interface Expected {
   main: string[][];
   subs: string[][];
   equippedBy: string | null;
+  /** The in-game Sonata filter tag's text in the image, null = none visible. */
+  filterTag: string | null;
 }
 
 interface Panel {
   expected: Expected;
   words: OcrWord[];
+  /** What the pipeline read beside the panel: the tag (or grid bar) words and the gold line. */
+  extras: PanelExtras;
 }
 
 /** Hand-written label table, deliberately NOT the parser's vocabulary. */
@@ -237,6 +241,7 @@ const LABEL_TO_STATS: Record<string, [StatKey, StatKey]> = {
   'Crit. Rate': ['critRate', 'critRate'],
   'Crit. DMG': ['critDmg', 'critDmg'],
   'Energy Regen': ['energyRegen', 'energyRegen'],
+  'Healing Bonus': ['healingBonus', 'healingBonus'],
   'Glacio DMG Bonus': ['dmgBonus:Glacio', 'dmgBonus:Glacio'],
   'Fusion DMG Bonus': ['dmgBonus:Fusion', 'dmgBonus:Fusion'],
   'Electro DMG Bonus': ['dmgBonus:Electro', 'dmgBonus:Electro'],
@@ -253,14 +258,79 @@ function expectedStat([label, text]: string[]): { stat: StatKey; value: number }
   return text.endsWith('%') ? { stat: pct, value: Math.round(Number(text.slice(0, -1)) * 10) / 1000 } : { stat: flat, value: Number(text) };
 }
 
+describe('parsePanel: equip guard, Sonata and Phantom names (2026-10-23 recording)', () => {
+  const NO_PICK: ScanBatch = { sonataId: null, rarity: 5 };
+  const everyone = snapshot.characters
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((c) => c.id);
+
+  it('flags a gold "Equipped by" line that OCR missed, offers every character, and points pass 5 at it', () => {
+    const line = { x0: 1335, y0: 880, x1: 1700, y1: 905 };
+    const { echo, flags } = parsePanel(panelWords(HEADER_KERASAUR, STATS_KERASAUR, ['Echo Skill']), BATCH, snapshot, { equipLine: line });
+    expect(echo.equippedTo).toBeNull();
+    expect(echo.equippedCandidates).toEqual(everyone);
+    expect(flags).toEqual([
+      { field: 'equipped', severity: 'error', message: 'an "Equipped by" line is visible but was not read — pick who wears it', row: { bbox: line, lines: 1 } },
+    ]);
+  });
+
+  it('raises nothing when the footer has no gold (unequipped) or the line was read', () => {
+    expect(parsePanel(panelWords(HEADER_KERASAUR, STATS_KERASAUR, ['Echo Skill']), BATCH, snapshot, { equipLine: null }).flags).toEqual([]);
+    const line = { x0: 1335, y0: 880, x1: 1700, y1: 905 };
+    const read = parsePanel(panelWords(HEADER_KERASAUR, STATS_KERASAUR, ['Echo Skill', 'Equipped by Denia']), BATCH, snapshot, { equipLine: line });
+    expect(read.flags).toEqual([]);
+    expect(read.echo.equippedTo).toBe('denia');
+  });
+
+  it('never imports an unrecognized wearer as unequipped', () => {
+    const { echo, flags } = parsePanel(panelWords(HEADER_KERASAUR, STATS_KERASAUR, ['Echo Skill', 'Equipped by Qwxyzz']), BATCH, snapshot);
+    expect(echo.equippedTo).toBeNull();
+    expect(echo.equippedCandidates).toEqual(everyone);
+    expect(flags.map((f) => [f.field, f.severity, f.message])).toEqual([
+      ['equipped', 'error', 'equipped character "Qwxyzz" not recognized — pick who wears it'],
+    ]);
+  });
+
+  it('takes the Sonata from the in-game filter tag when no set is picked', () => {
+    const tag = [w('Windward', 180, 900, 300, 922), w('Pilgrimage', 310, 900, 450, 922), w('Sort', 260, 960, 310, 982), w('by', 318, 960, 340, 982), w('Level', 348, 960, 420, 982)];
+    const { echo, flags } = parsePanel(panelWords(HEADER_KERASAUR, STATS_KERASAUR), NO_PICK, snapshot, { tag });
+    expect(flags).toEqual([]);
+    expect(echo.sonataId).toBe('windward-pilgrimage');
+  });
+
+  it('reads "Phantom: X" as X exactly (a cosmetic variant, user-confirmed)', () => {
+    const { echo, flags } = parsePanel(
+      panelWords(
+        ['Phantom: Forbidden Bastion', '+25', 'COST 3'],
+        [
+          ['Energy Regen', '32.0%'],
+          ['ATK', '100'],
+          ['DEF', '10.0%'],
+          ['ATK', '7.9%'],
+          ['Crit. DMG', '15.0%'],
+          ['HP', '10.9%'],
+          ['Energy Regen', '12.4%'],
+        ],
+      ),
+      { sonataId: 'song-of-feathered-trace', rarity: 5 },
+      snapshot,
+    );
+    expect(flags).toEqual([]);
+    expect(echo.echoDefId).toBe('forbidden-bastion');
+  });
+});
+
 /** JSON tuples arrive as loose arrays; rebuild them as typed words. */
-const panels: [string, Panel][] = Object.entries(fixtures.panels).map(([name, raw]) => [
-  name,
-  {
-    expected: raw.expected,
-    words: raw.words.map(([text, x0, y0, x1, y1]) => w(String(text), Number(x0), Number(y0), Number(x1), Number(y1))),
-  },
-]);
+const toWords = (tuples: (string | number)[][]): OcrWord[] =>
+  tuples.map(([text, x0, y0, x1, y1]) => w(String(text), Number(x0), Number(y0), Number(x1), Number(y1)));
+const panels: [string, Panel][] = Object.entries(fixtures.panels).map(([name, raw]) => {
+  const extras: PanelExtras = {
+    equipLine: raw.equipLine === null ? null : { x0: raw.equipLine[0], y0: raw.equipLine[1], x1: raw.equipLine[2], y1: raw.equipLine[3] },
+  };
+  if (raw.tag !== null) extras.tag = toWords(raw.tag);
+  return [name, { expected: raw.expected, words: toWords(raw.words), extras }];
+});
 
 function panel(name: string): Panel {
   const found = panels.find(([n]) => n === name);
@@ -268,21 +338,37 @@ function panel(name: string): Panel {
   return found[1];
 }
 
-describe('parsePanel on 33 real OCR reads (tesseract.js 7, 5-pass: 17 screenshots + 16 video frames)', () => {
+/** The Echo def a fixture shows ("Phantom: X" is the cosmetic variant of X). */
+function fixtureDef(expected: Expected) {
+  const def = snapshot.echoDefs.find((d) => d.name === expected.name.replace(/^Phantom: /, ''));
+  if (def === undefined) throw new Error(`no def for ${expected.name}`);
+  return def;
+}
+
+/** The set the app must find: the filter tag in the image, else the Echo's only set, else none (it must ask). */
+function expectedSonata(expected: Expected): string | null {
+  if (expected.filterTag !== null) return snapshot.sonataSets.find((s) => s.name === expected.filterTag)?.id ?? `unknown:${expected.filterTag}`;
+  const def = fixtureDef(expected);
+  return def.sonataIds.length === 1 ? def.sonataIds[0] : null;
+}
+
+/** As the app reads by default: no set picked; the tag and gold line come from the pipeline. */
+const NO_PICK: ScanBatch = { sonataId: null, rarity: 5 };
+
+describe('parsePanel on 84 real OCR reads (tesseract.js 7: 17 screenshots, 16 + 51 frames of two recordings)', () => {
   it.each(panels)('%s: every wrong field is flagged (zero silent errors)', (_name, panel) => {
-    const words = panel.words;
-    const def = snapshot.echoDefs.find((d) => d.name === panel.expected.name);
-    expect(def).toBeDefined();
-    const { echo, flags } = parsePanel(words, { sonataId: def!.sonataIds[0], rarity: 5 }, snapshot);
+    const def = fixtureDef(panel.expected);
+    const { echo, flags } = parsePanel(panel.words, NO_PICK, snapshot, panel.extras);
     const flagged = new Set(flags.map((f) => f.field));
     const wrongAndSilent: string[] = [];
     const check = (field: ScanField, ok: boolean): void => {
       const covered = flagged.has(field) || (field.startsWith('sub') && flagged.has('substats'));
       if (!ok && !covered) wrongAndSilent.push(field);
     };
-    check('name', echo.echoDefId === def!.id);
+    check('name', echo.echoDefId === def.id);
     check('level', echo.level === panel.expected.level);
     check('cost', echo.cost === panel.expected.cost);
+    check('sonata', echo.sonataId === expectedSonata(panel.expected));
     check('main', JSON.stringify(echo.mainStat) === JSON.stringify(expectedStat(panel.expected.main[0])));
     check('second', JSON.stringify(echo.secondMainStat) === JSON.stringify(expectedStat(panel.expected.main[1])));
     panel.expected.subs.forEach((s, i) => {
@@ -294,15 +380,27 @@ describe('parsePanel on 33 real OCR reads (tesseract.js 7, 5-pass: 17 screenshot
     expect(wrongAndSilent).toEqual([]);
   });
 
-  it('reads 31 of 33 panels with no flags at all (the rest: one approximate name, one Rover choice)', () => {
-    const clean = panels.filter(([, panel]) => {
-      const def = snapshot.echoDefs.find((d) => d.name === panel.expected.name)!;
-      return parsePanel(panel.words, { sonataId: def.sonataIds[0], rarity: 5 }, snapshot).flags.length === 0;
-    });
-    expect(clean).toHaveLength(31);
+  it('reads every filter tag in the fixtures exactly, and finds no tag where none is shown', () => {
+    for (const [name, p] of panels) {
+      const { echo, flags } = parsePanel(p.words, NO_PICK, snapshot, p.extras);
+      if (p.expected.filterTag !== null) {
+        expect([name, echo.sonataId, flags.filter((f) => f.field === 'sonata')]).toEqual([name, expectedSonata(p.expected), []]);
+      }
+    }
+    expect(panels.filter(([, p]) => p.expected.filterTag !== null)).toHaveLength(62);
   });
 
-  it('reads the reference panel (Threnodian Leviathan) exactly', () => {
+  it('reads 52 of 84 panels with no flags at all', () => {
+    // The rest (measured 2026-10-23): 16 multi-set Echoes with no in-game
+    // filter set (the 2026-10-16 screenshots, the recording's unfiltered
+    // start), 14 approximate names, 3 COST misses, and one each of: a
+    // missed substat row, a misread DEF value, a Rover choice — some
+    // panels carry two.
+    const clean = panels.filter(([, p]) => parsePanel(p.words, NO_PICK, snapshot, p.extras).flags.length === 0);
+    expect(clean).toHaveLength(52);
+  });
+
+  it('reads the reference panel (Threnodian Leviathan) exactly when the set is picked', () => {
     const { echo, flags } = parsePanel(panel('2026-10-16_16-56-49').words, { sonataId: 'flamewing-s-shadow', rarity: 5 }, snapshot);
     expect(flags).toEqual([]);
     expect(echo).toEqual({
@@ -322,5 +420,23 @@ describe('parsePanel on 33 real OCR reads (tesseract.js 7, 5-pass: 17 screenshot
       ],
       equippedTo: 'galbrena',
     });
+  });
+
+  it('reads the faded frames after the Filter sheet closes with their wearer (gold check + pass 5)', () => {
+    for (const [name, wearer] of [
+      ['v2-seg12', 'sanhua'],
+      ['v2-seg40', 'yangyang-xuanling'],
+      ['v2-seg182', 'aemeath'],
+    ] as const) {
+      const p = panel(name);
+      expect(p.extras.equipLine).not.toBeNull();
+      expect([name, parsePanel(p.words, NO_PICK, snapshot, p.extras).echo.equippedTo]).toEqual([name, wearer]);
+    }
+  });
+
+  it('accepts the 26.4% Healing Bonus main stat seen in game', () => {
+    const { echo, flags } = parsePanel(panel('v2-seg44').words, NO_PICK, snapshot, panel('v2-seg44').extras);
+    expect(echo.mainStat).toEqual({ stat: 'healingBonus', value: 0.264 });
+    expect(flags.filter((f) => f.field === 'main')).toEqual([]);
   });
 });

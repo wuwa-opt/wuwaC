@@ -37,9 +37,15 @@ beforeEach(() => {
 afterEach(() => setScanDeps(null));
 
 describe('scan store', () => {
-  it('refuses images until the batch Sonata is chosen', async () => {
-    await expect(useScanStore.getState().addImages([file('2026-10-16_16-56-49')])).rejects.toThrow(/Sonata set/);
-    expect(useScanStore.getState().items).toEqual([]);
+  it('reads images with no set picked, and asks for the set when the game does not show it', async () => {
+    // The fake reader passes no filter-tag words, and Leviathan rolls two sets.
+    await useScanStore.getState().addImages([file('2026-10-16_16-56-49')]);
+    const [item] = useScanStore.getState().items;
+    expect(item.batch).toEqual({ sonataId: null, rarity: 5 });
+    expect(item.parse?.echo.sonataId).toBeNull();
+    expect(item.parse?.flags).toEqual([
+      { field: 'sonata', severity: 'error', message: expect.stringMatching(/^Sonata set not known/) as unknown as string },
+    ]);
   });
 
   it('reads and parses images under the batch, stamping the batch on each item', async () => {
@@ -165,6 +171,21 @@ describe('reviewRows', () => {
     expect(reviewRows(useScanStore.getState().items, [owned]).map((r) => r.included)).toEqual([true, true, true]);
   });
 
+  it('ticks neither copy when same-roll rows disagree on who wears the Echo', async () => {
+    const store = useScanStore.getState();
+    store.setBatch({ sonataId: 'flamewing-s-shadow' });
+    await store.addImages([file('2026-10-16_16-56-49'), file('2026-10-16_17-18-02'), file('2026-10-16_16-56-49')]);
+    const items = useScanStore.getState().items;
+    // The first copy read "Equipped by Galbrena"; say the third came out unequipped (a faded line).
+    const unequipped = { ...reviewRows(items, [])[2].draft!, equippedTo: null };
+    const rows = reviewRows([items[0], items[1], { ...items[2], override: unequipped }], []);
+    expect(rows.map((r) => [r.repeatOf, r.equipConflict, r.included])).toEqual([
+      [null, true, false],
+      [null, false, true],
+      [0, true, false],
+    ]);
+  });
+
   it('marks error rows as fix and never includes them until overridden', async () => {
     const store = useScanStore.getState();
     // Wrong batch set for this Echo -> sonata error flag.
@@ -253,10 +274,6 @@ describe('video scans', () => {
     store.setBatch({ sonataId: 'windward-pilgrimage' });
     await store.addVideo(file('broken.mkv'));
     expect(useScanStore.getState().lastVideo).toEqual({ fileName: 'broken.mkv', found: 1, skipped: 0, cancelled: false, error: 'decoder died' });
-  });
-
-  it('needs the batch Sonata first, like screenshots', async () => {
-    await expect(useScanStore.getState().addVideo(file('clip.mp4'))).rejects.toThrow(/Sonata set/);
   });
 
   it('treats a parse with no name, cost or main stat as panel-less — and only that', () => {

@@ -38,9 +38,10 @@ afterEach(() => setScanDeps(null));
 const png = (name: string): File => new File(['x'], `${name}.png`, { type: 'image/png' });
 
 describe('EchoScanner', () => {
-  it('needs the batch Sonata before screenshots can be added', () => {
+  it('takes screenshots with no set picked: the set is read from the in-game filter by default', () => {
     render(<EchoScanner onClose={() => undefined} onImported={() => undefined} />);
-    expect(screen.getByRole('button', { name: /add screenshots/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /add screenshots/i })).toBeEnabled();
+    expect(screen.getByLabelText(/sonata set/i)).toHaveDisplayValue('Read from the in-game filter');
   });
 
   it('scans, shows review states and the filter count, and imports the included echoes', async () => {

@@ -18,10 +18,10 @@ describe('echo stat tables', () => {
     expect(MAIN_STAT_RANGES[3].defPct).toEqual({ min: 0.076, max: 0.38 });
   });
 
-  it('bounds 4-cost mains (22% CR, 44% CD, 26% HB)', () => {
+  it('bounds 4-cost mains (22% CR, 44% CD, 26.4% HB)', () => {
     expect(MAIN_STAT_RANGES[4].critRate).toEqual({ min: 0.044, max: 0.22 });
     expect(MAIN_STAT_RANGES[4].critDmg).toEqual({ min: 0.088, max: 0.44 });
-    expect(MAIN_STAT_RANGES[4].healingBonus).toEqual({ min: 0.052, max: 0.26 });
+    expect(MAIN_STAT_RANGES[4].healingBonus).toEqual({ min: 0.052, max: 0.264 });
     // 4-cost has no energy-regen pool in the reference.
     expect(MAIN_STAT_RANGES[4].energyRegen).toBeUndefined();
   });

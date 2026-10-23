@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { ScanDraft } from '../scanner/draft.ts';
 import { screenshotProblem } from '../scanner/imageLimits.ts';
 import type { FrameReader } from '../scanner/engine.ts';
-import { parsePanel, type PanelParse, type ScanBatch } from '../scanner/parse.ts';
+import { isPanelless, parsePanel, type ScanBatch } from '../scanner/parse.ts';
 import type { ScanItem } from '../scanner/review.ts';
 import type { VideoScanOptions, VideoScanResult } from '../scanner/videoFrames.ts';
 import { useSnapshotStore } from './snapshotStore.ts';
@@ -16,7 +16,10 @@ import { useSnapshotStore } from './snapshotStore.ts';
  * store's normal `importEchoes` write path.
  */
 
-export interface ScanBatchSettings extends ScanBatch {
+export interface ScanBatchSettings {
+  /** The set picked in the app; '' = read it from the game (the in-game filter tag). */
+  sonataId: string;
+  rarity: number;
   /** The in-game filter's count for this set, for a done/overshoot check. */
   expected: number | null;
 }
@@ -84,14 +87,11 @@ export interface VideoOutcome {
 }
 
 /**
- * A frame shows no Echo panel when the parser recognized none of name,
- * cost and main stat (e.g. the desktop before the game window, or another
- * menu). Such frames are dropped from a video scan; a dropped screenshot
- * still fails visibly on its own row.
+ * Frames that show no Echo panel (`isPanelless`: the in-game Filter
+ * sheet, another menu, the desktop) are dropped from a video scan; a
+ * dropped screenshot still fails visibly on its own row.
  */
-export function isPanelless(parse: PanelParse): boolean {
-  return parse.echo.echoDefId === null && parse.echo.cost === null && parse.echo.mainStat === null;
-}
+export { isPanelless };
 
 let videoAbort: AbortController | null = null;
 
@@ -175,7 +175,7 @@ export const useScanStore = create<ScanState>()((set, get) => {
     try {
       const read = await ensureReader();
       const snapshot = useSnapshotStore.getState().snapshot;
-      const { parse } = await read(image, (words) => parsePanel(words, batch, snapshot));
+      const { parse } = await read(image, (words, extras) => parsePanel(words, batch, snapshot, extras));
       patchItem(id, { status: 'done', parse });
     } catch (err) {
       patchItem(id, { status: 'failed', error: err instanceof Error ? err.message : 'Could not read this image.' });
@@ -192,8 +192,7 @@ export const useScanStore = create<ScanState>()((set, get) => {
 
   const currentBatch = (): ScanBatch => {
     const { sonataId, rarity } = get().batch;
-    if (sonataId === '') throw new Error('Pick the Sonata set your in-game filter shows first.');
-    return { sonataId, rarity };
+    return { sonataId: sonataId === '' ? null : sonataId, rarity };
   };
 
   return {

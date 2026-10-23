@@ -31,7 +31,9 @@ Secondary: flat HP (fixed).
 | DEF% | 8.3% - 41.5% |
 | Crit. Rate | 4.4% - 22.0% |
 | Crit. DMG | 8.8% - 44.0% |
-| Healing Bonus | 5.2% - 26.0% |
+| Healing Bonus | 5.2% - 26.4% |
+
+*Healing Bonus max corrected from 26.0% to 26.4%: observed in-game on a 5★ +25 4-cost Echo (Thousand-Puppet Pavilion), user's recording 2026-10-23. The 5.2% minimum is unverified.*
 
 ---
 

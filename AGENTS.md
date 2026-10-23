@@ -406,11 +406,22 @@ interface Team {
   if `parseCost` drops — unread fields outrank flag counts), `draft.ts`,
   `review.ts` (owned Echoes and in-scan repeats start unticked), `video.ts`
   (panel-change detector: name line x < 0.55 + stat block, threshold 2.5,
-  measured on a real recording). Browser-only: `engine.ts` (tesseract.js
+  measured on a real recording), `pixels.ts` (gold "Equipped by" check:
+  gold in the footer with no line read is an error flag whose row pass 5
+  re-reads, plus the filter-tag box finder), `sonata.ts` (set per row).
+  Browser-only: `engine.ts` (tesseract.js
   pool) and `videoFrames.ts` (4× playback via requestVideoFrameCallback,
   gaps over 0.25 s refilled by seeking, so dropped frames cost time, never
-  an Echo), both lazily imported by `state/scanStore.ts`. Sonata and rarity are
-  NOT read from pixels — the user mirrors the in-game filter per batch.
+  an Echo), both lazily imported by `state/scanStore.ts`.
+  - **Sonata** is never read from the panel's icon (no reference art can be
+    bundled). It comes from the in-game filter's tag (dark box found in
+    pixels, read as one line); with the grid bar visible and no tag, no
+    filter is set and the app's pick is NOT applied; only a region capture
+    without that area uses the pick. An Echo that rolls one set needs
+    neither. Rarity still comes from the batch.
+  - A frame whose pass 1 shows no panel (the in-game Filter sheet) stops
+    after pass 1. Same-roll rows that disagree on "Equipped by" start
+    unticked. "Phantom: X" is X (cosmetic, user-confirmed).
   OCR runtime is self-hosted under `ocr/<tesseract version>/` by the
   `ocrAssets` plugin in `vite.config.ts` (never precached, never a CDN;
   tesseract's own IndexedDB cache stays off — unprefixed store name).
@@ -418,12 +429,14 @@ interface Team {
   20 MiB, 16 MP (4K = 8.3 MP, 5K = 14.7 MP), PNG/JPEG/WebP only, with the
   size read from the header. A refused file fails its own row with a
   message, and the rest of the batch is read.
-  Regression gate: `src/scanner/fixtures/panels.json` (real OCR words +
-  hand-read truth) must keep ZERO silent errors. Real screenshots live
+  Regression gate: `src/scanner/fixtures/panels.json` (84 panels: real OCR
+  words, tag words, gold line + hand-read truth incl. `filterTag`) must
+  keep ZERO silent errors, Sonata included. Real screenshots live
   only in gitignored `scan-fixtures/` (video frames in
-  `scan-fixtures/video/`); re-measure engine changes with
-  `npx tsx scripts/scan-spike.ts scan-fixtures/*.png scan-fixtures/video/*.png`
-  then `npx tsx scripts/scan-eval.ts scan-fixtures/ocr js5pass`.
+  `scan-fixtures/video/`, `video2/`); re-measure engine changes with
+  `npx tsx scripts/scan-spike.ts <frames>` then
+  `npx tsx scripts/scan-eval.ts scan-fixtures/ocr js6`. The 4× video walk
+  samples different frames per run: judge it over several browser runs.
 - Roll quality (Echo substat tiers, 10-block roll value) is the pure module
   `src/domain/rollValue.ts` over `SUB_STAT_TIERS`; UI only renders it.
 - Unused-Echo finder: the pure optimizer module `src/optimizer/unused.ts`

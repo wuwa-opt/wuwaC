@@ -1,5 +1,6 @@
 import type { CharacterData, EchoDefData, Snapshot, StatKey } from '../data/schema.ts';
 import { canonical, matchVocab, type MatchResult, type VocabEntry } from './match.ts';
+import { readFilterTag, resolveSonata } from './sonata.ts';
 import {
   parseNumberToken,
   readPrimaryMain,
@@ -24,9 +25,11 @@ import {
  *   cost    = `COST n`
  *   stats   = rows below COST ending in a number: 1st = primary main,
  *             2nd = fixed secondary, rest = substats (on-screen order)
- *   equipped = `Equipped by <character>`
- * Sonata and rarity are NOT on the panel as text — they come from the
- * scan batch (the user mirrors the in-game Sonata/Rarity filter).
+ *   equipped = `Equipped by <character>`, backed by a gold-pixel check
+ *             (`PanelExtras.equipLine`) so a missed line is flagged
+ * The Sonata set is NOT on the panel as text: it comes from the in-game
+ * filter tag beside the grid, or the set picked in the app (sonata.ts).
+ * Rarity comes from the scan batch (the user mirrors the in-game filter).
  *
  * Contract: nothing is silently corrected. Every field that is not an
  * exact read carries a flag; `severity: 'error'` means no draft can be
@@ -49,8 +52,20 @@ export interface OcrWord {
 
 /** Per-batch context mirrored from the in-game filters. */
 export interface ScanBatch {
-  sonataId: string;
+  /** The set picked in the app; null = read it from the game (sonata.ts). */
+  sonataId: string | null;
   rarity: number;
+}
+
+/** What the pipeline saw outside the panel passes. */
+export interface PanelExtras {
+  /** Words read off the filter tag, or off the grid bar when no tag was seen (pipeline `readTag`); absent = not read. */
+  tag?: readonly OcrWord[];
+  /**
+   * Box of the gold "Equipped by" line found in pixels (`equipLineBox`),
+   * null = no gold line; absent = pixels not checked.
+   */
+  equipLine?: OcrBox | null;
 }
 
 export type ScanField = 'name' | 'level' | 'cost' | 'sonata' | 'main' | 'second' | 'substats' | `sub${1 | 2 | 3 | 4 | 5}` | 'equipped';
@@ -84,7 +99,8 @@ export interface ScannedEcho {
   cost: 1 | 3 | 4 | null;
   level: number | null;
   rarity: number;
-  sonataId: string;
+  /** Null when it could not be decided (an error flag says why). */
+  sonataId: string | null;
   mainStat: ScannedStat | null;
   secondMainStat: ScannedStat | null;
   /** On-screen order; null = a row that was read but could not be resolved. */
@@ -273,7 +289,7 @@ function isWrapContinuation(row: OcrRow, prev: StatRow): boolean {
 
 const STOP_RE = /echo\s*skill|equipped\s*by/i;
 
-export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot: Snapshot): PanelParse {
+export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot: Snapshot, extras: PanelExtras = {}): PanelParse {
   const rows = groupRows(words);
   const flags: ScanFlag[] = [];
   const flag = (field: ScanField, severity: ScanFlag['severity'], message: string, row?: FlagRow): void => {
@@ -286,7 +302,11 @@ export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot
   const header = costIndex >= 0 ? rows.slice(0, costIndex) : rows;
 
   // Name.
-  const nameVocab: VocabEntry<EchoDefData>[] = snapshot.echoDefs.map((d) => ({ text: d.name, value: d }));
+  // "Phantom: X" is a cosmetic variant of X (same Echo, same stats; user-confirmed 2026-10-23).
+  const nameVocab: VocabEntry<EchoDefData>[] = snapshot.echoDefs.flatMap((d) => [
+    { text: d.name, value: d },
+    { text: `${PHANTOM_PREFIX}${d.name}`, value: d },
+  ]);
   let def: EchoDefData | null = null;
   let bestName: Scored<EchoDefData> | null = null;
   let nameIndex = -1;
@@ -349,11 +369,10 @@ export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot
   }
   if (level === null) flag('level', 'error', 'level (+N) not read');
 
-  // Sonata from the batch, validated against the def.
-  if (def !== null && !def.sonataIds.includes(batch.sonataId)) {
-    const names = def.sonataIds.map((id) => snapshot.sonataSets.find((s) => s.id === id)?.name ?? id).join(' / ');
-    flag('sonata', 'error', `${def.name} cannot roll the batch set — it rolls ${names}. Is the in-game Sonata filter still set?`);
-  }
+  // Sonata: the in-game filter tag, else the set picked in the app (sonata.ts).
+  const tag = extras.tag === undefined ? { kind: 'none' as const, gridBar: false } : readFilterTag(extras.tag, snapshot.sonataSets);
+  const sonata = resolveSonata(def, tag, batch.sonataId, snapshot.sonataSets);
+  for (const f of sonata.flags) flag('sonata', f.severity, f.message);
 
   // Stat rows. The block starts at the first row with a recognizable
   // stat label: junk between COST and the stats (the lock/discard icon
@@ -433,6 +452,11 @@ export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot
   // Equipped by.
   let equippedTo: string | null = null;
   let equippedCandidates: string[] | undefined;
+  const everyone = (): string[] =>
+    snapshot.characters
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((c) => c.id);
   const equippedRow = rows.find((r) => /equipped\s*by/i.test(r.text));
   if (equippedRow !== undefined) {
     const who = equippedRow.text.replace(/^.*?equipped\s*by\s*/i, '');
@@ -446,8 +470,15 @@ export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot
       // A real choice (e.g. "Rover"), not a misread: no row to re-read.
       flag('equipped', 'review', `"${who.trim()}" matches ${resolved.ids.length} characters — pick one`);
     } else {
-      flag('equipped', 'review', `equipped character "${who.trim()}" not recognized — left unequipped`, at);
+      // Importing it as unequipped would be a wrong value: the user picks.
+      equippedCandidates = everyone();
+      flag('equipped', 'error', `equipped character "${who.trim()}" not recognized — pick who wears it`, at);
     }
+  } else if (extras.equipLine != null) {
+    // Gold text where no line was read (e.g. the Filter sheet still fading
+    // out over it): the Echo is equipped, so "unequipped" would be wrong.
+    equippedCandidates = everyone();
+    flag('equipped', 'error', 'an "Equipped by" line is visible but was not read — pick who wears it', { bbox: extras.equipLine, lines: 1 });
   }
 
   return {
@@ -456,7 +487,7 @@ export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot
       cost,
       level,
       rarity: batch.rarity,
-      sonataId: batch.sonataId,
+      sonataId: sonata.sonataId,
       mainStat,
       secondMainStat,
       substats,
@@ -465,6 +496,17 @@ export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot
     },
     flags,
   };
+}
+
+/** Cosmetic variant prefix on some Echo names ("Phantom: Forbidden Bastion"). */
+const PHANTOM_PREFIX = 'Phantom: ';
+
+/**
+ * A frame shows no Echo panel when the parser recognized none of name,
+ * cost and main stat (the in-game Filter sheet, another menu, the desktop).
+ */
+export function isPanelless(parse: PanelParse): boolean {
+  return parse.echo.echoDefId === null && parse.echo.cost === null && parse.echo.mainStat === null;
 }
 
 /** Minimum canonical length for a prefix read to count as evidence. */

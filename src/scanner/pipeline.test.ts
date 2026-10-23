@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Rect } from './layout.ts';
-import type { OcrWord, PanelParse, ScannedEcho } from './parse.ts';
+import type { OcrWord, PanelExtras, PanelParse, ScannedEcho } from './parse.ts';
 import { parseCost, readPanel, readPanelWords, retryTargets, type PassMode } from './pipeline.ts';
 
 function w(text: string, x0: number, y0: number, x1: number, y1: number): OcrWord {
@@ -158,6 +158,96 @@ describe('readPanel (pass 5)', () => {
       1080,
       () => ({ echo: ECHO, flags: [] }),
     );
+    // Passes 1–4 only: with no pixels there is no tag read or equip check.
     expect(modes).toEqual(['sparse', 'digits', 'block', 'block']);
+  });
+});
+
+describe('readPanel (filter tag, equip check, panel-less frames)', () => {
+  const empty: PanelParse = { echo: { ...ECHO, echoDefId: null, cost: null, mainStat: null }, flags: [] };
+
+  it('stops after pass 1 when it shows no Echo panel (the in-game Filter sheet)', async () => {
+    const modes: PassMode[] = [];
+    let pixelsAsked = false;
+    const read = await readPanel(
+      (_rect, mode) => {
+        modes.push(mode);
+        return Promise.resolve([w('Filtered:', 1300, 860, 1400, 880)]);
+      },
+      1920,
+      1080,
+      () => empty,
+      () => {
+        pixelsAsked = true;
+        return Promise.reject(new Error('not needed'));
+      },
+    );
+    expect(modes).toEqual(['sparse']);
+    expect(pixelsAsked).toBe(false);
+    expect(read.parse).toBe(empty);
+    expect(read.extras).toEqual({});
+  });
+
+  /** Fake pixels: a dark tag box (tag area) and/or a gold line (footer strip), background elsewhere. */
+  function fakePixels(opts: { tagBox: boolean; gold: boolean }, asked: Rect[]) {
+    return (rect: Rect) => {
+      asked.push(rect);
+      const data = new Uint8ClampedArray(rect.width * rect.height * 4);
+      for (let i = 0; i < rect.width * rect.height; i++) data.set([136, 159, 175, 255], i * 4);
+      if (rect.top === 864 && opts.tagBox) {
+        // 420×50 near-black box at (100, 20) of the tag area.
+        for (let y = 20; y < 70; y++) for (let x = 100; x < 520; x++) data.set([20, 20, 24, 255], (y * rect.width + x) * 4);
+      }
+      if (rect.top === 619 && opts.gold) {
+        // 230 gold pixels (0.1% of the 653×331 strip is 216.1) in one row, 10–239 px into the strip.
+        for (let x = 10; x < 240; x++) data.set([230, 205, 150, 255], (40 * rect.width + x) * 4);
+      }
+      return Promise.resolve({ width: rect.width, height: rect.height, data });
+    };
+  }
+  // The footer strip: 2 lines under the last stat row (y 575 + 2×22 = 619) to the band's bottom (950).
+  const FOOTER = { left: 1267, top: 619, width: 653, height: 331 };
+  // filterTagRect(1920, 1080): x 4–36%, y 80–95%.
+  const TAG_AREA = { left: 77, top: 864, width: 614, height: 162 };
+
+  it('reads the tag box found in pixels as one line, checks the footer for gold, and hands both to every parse', async () => {
+    const calls: { mode: PassMode; rect: Rect }[] = [];
+    const tagWords = [w('Trailblazing', 180, 890, 340, 912), w('Star', 350, 890, 400, 912)];
+    const ocr = (rect: Rect, mode: PassMode): Promise<OcrWord[]> => {
+      calls.push({ mode, rect });
+      if (calls.length === 1) return Promise.resolve(SPARSE);
+      return Promise.resolve(calls.length === 5 ? tagWords : []);
+    };
+    const asked: Rect[] = [];
+    const seen: (PanelExtras | undefined)[] = [];
+    const read = await readPanel(
+      ocr,
+      1920,
+      1080,
+      (_words, extras) => {
+        seen.push(extras);
+        return { echo: ECHO, flags: [] };
+      },
+      fakePixels({ tagBox: true, gold: true }, asked),
+    );
+    expect(asked).toEqual([TAG_AREA, FOOTER]);
+    // The box, in frame pixels, read as one line from a crop.
+    expect(calls[4]).toEqual({ mode: 'tag', rect: { left: 177, top: 884, width: 420, height: 50 } });
+    const extras = { tag: tagWords, equipLine: { x0: 1277, y0: 659, x1: 1507, y1: 660 } };
+    // seen[0] is the pass-1 panel check, which gets no extras.
+    expect(seen).toEqual([undefined, extras]);
+    expect(read.extras).toEqual(extras);
+  });
+
+  it('reads the grid bar instead when no tag box is seen, and reports no gold line', async () => {
+    const calls: { mode: PassMode; rect: Rect }[] = [];
+    const ocr = (rect: Rect, mode: PassMode): Promise<OcrWord[]> => {
+      calls.push({ mode, rect });
+      return Promise.resolve(calls.length === 1 ? SPARSE : []);
+    };
+    const read = await readPanel(ocr, 1920, 1080, () => ({ echo: ECHO, flags: [] }), fakePixels({ tagBox: false, gold: false }, []));
+    // gridBarRect(1920, 1080): y 88% (950) to the tag area's bottom (1026).
+    expect(calls[4]).toEqual({ mode: 'tag', rect: { left: 77, top: 950, width: 614, height: 76 } });
+    expect(read.extras).toEqual({ tag: [], equipLine: null });
   });
 });

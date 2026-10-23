@@ -43,6 +43,12 @@ export interface ReviewRow {
    * unticked and the user can tick it.
    */
   repeatOf: number | null;
+  /**
+   * Another row has the same rolls but a different "Equipped by". One of
+   * them is a misread (seen: a frame where the line was faded), so neither
+   * is ticked by default — the user picks the right copy.
+   */
+  equipConflict: boolean;
   included: boolean;
 }
 
@@ -61,22 +67,30 @@ function rowState(item: ScanItem, draft: ScanDraft | null): RowState {
 export function reviewRows(items: readonly ScanItem[], owned: readonly OwnedEcho[]): ReviewRow[] {
   const drafts = items.map(rowDraft);
   const known = markKnown(drafts, owned);
+  const fingerprints = drafts.map((d) => (d === null ? null : echoFingerprint(d)));
   const firstSeen = new Map<string, number>();
+  const wearers = new Map<string, Set<string | null>>();
+  fingerprints.forEach((fp, i) => {
+    if (fp === null) return;
+    if (!firstSeen.has(fp)) firstSeen.set(fp, i);
+    const set = wearers.get(fp) ?? new Set<string | null>();
+    set.add(drafts[i]!.equippedTo);
+    wearers.set(fp, set);
+  });
   return items.map((item, i) => {
     const draft = drafts[i];
-    let repeatOf: number | null = null;
-    if (draft !== null) {
-      const fp = echoFingerprint(draft);
-      repeatOf = firstSeen.get(fp) ?? null;
-      if (repeatOf === null) firstSeen.set(fp, i);
-    }
+    const fp = fingerprints[i];
+    const first = fp === null ? undefined : firstSeen.get(fp);
+    const repeatOf = first === undefined || first === i ? null : first;
+    const equipConflict = fp !== null && (wearers.get(fp)?.size ?? 0) > 1;
     return {
       item,
       draft,
       state: rowState(item, draft),
       known: known[i],
       repeatOf,
-      included: draft !== null && (item.include ?? (!known[i] && repeatOf === null)),
+      equipConflict,
+      included: draft !== null && (item.include ?? (!known[i] && repeatOf === null && !equipConflict)),
     };
   });
 }

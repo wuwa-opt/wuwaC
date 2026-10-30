@@ -199,6 +199,21 @@ UI (React components)
     (`createProgressTracker`, `protocol.ts`) fires the search's opening
     `report(0)` once, so the page learns `total` right after setup, not
     after the first step.
+    - **Count:** `defaultConcurrency(poolSize, cores, device)` is pure.
+      Pools under 40 Echoes get 1 worker; otherwise cores − 1, capped at
+      8, at 4 on a phone and at 2 under 4 GB (`navigator.deviceMemory`).
+      `readDeviceHints` counts as a phone Chromium's
+      `userAgentData.mobile` or a touch-only device (coarse pointer, no
+      fine pointer anywhere; a touch laptop isn't one).
+    - Measured 2026-10-30 on the 240-Echo seed inventory
+      (`npm run bench`):
+      - 12 threads: 4 workers 14.6 s, 7 workers 12.5 s;
+      - pinned to 4 cores: 4 workers 13.9 s, 7 workers 14.9 s;
+      - each worker adds ~17-20 MB in Chromium.
+    - CDP CPU throttling doesn't reach workers, so a slowed browser can't
+      time this. Phone heat is unmeasured.
+    - The count changes only the time: `search.test.ts` checks that 1, 2,
+      4, 7 and 8 shards merge to the single-run result.
   - **Prepared scoring:** `search.ts` scores through
     `prepareObjective(spec, ctx)` (`domain/objectives.ts`, built on
     `domain/preparedScoring.ts`). It resolves everything that doesn't depend
@@ -555,6 +570,18 @@ interface Team {
   - Undo lives in memory only. It is dropped when `load()` bumps
     `generation` (a backup restore) and when the toast goes. It survives a
     section switch, because toasts live in one app-wide store.
+  - **Builds** work the same way (2026-10-30). The Builds page Delete
+    shows an Undo toast. `useLibraryStore.removeBuild`/`removeBuilds`
+    return the removed rows. `restoreBuilds` takes only that output, runs
+    in one transaction, writes the rows back verbatim under the same ids,
+    never overwrites an id that exists again (reported as `skipped`), and
+    puts each row back at its old place in the list.
+    - Allocation picks and the Builds page's per-build state (open
+      details) key on the build id, so they apply again after Undo.
+    - The library has its own `generation` (bumped by `load()`), and
+      `LIBRARY_UNDO_SCOPE` toasts go when it changes. The Teams page's
+      "Save as builds" Undo uses that scope too, so after a backup
+      restore it can't delete builds that came back with the same ids.
 - **Team allocation** (Teams page, `ui/components/TeamAllocation.tsx`;
   optimizer side `optimizer/allocate.ts` + `allocateMembers.ts`). It is
   greedy, not a joint optimum, and the UI must keep saying so.
@@ -659,6 +686,12 @@ interface Team {
   - A section switch scrolls to the top (App, before paint). Tapping the
     current bottom tab again scrolls up.
   - **Inventory:**
+    - Phones (below `md`) show the first Echo row on the first screen.
+      The mascot and bubble sit under the Echo Box (CSS order). The cost
+      tiles are one 44 px row of chips (pips hidden). The two filters sit
+      side by side (`Window` `actionsClassName`). At 360×740 with 700
+      Echoes the first row moved from y 845 to 609, above the tab bar at
+      681 (2026-10-30). `md` and up are unchanged.
     - The Echo list renders in batches of 30 (`ui/incremental.ts`
       `useIncrementalCount`: a sentinel ~2 screens ahead plus a "Show N
       more" button; a filter change starts over). 700 Echoes rendered at

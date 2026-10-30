@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type ComponentType, type LazyExoticComponent } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type ComponentType, type LazyExoticComponent } from 'react';
 import { SECTIONS, initSectionRouting, useAppStore, type Section } from './state/store.ts';
 import { useThemeStore } from './state/theme.ts';
 import { CommandPalette } from './ui/components/palette.tsx';
@@ -119,7 +119,8 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const activeSection = useAppStore((s) => s.activeSection);
   const setActiveSection = useAppStore((s) => s.setActiveSection);
   return (
-    <header className="border-b-[3px] border-outline bg-panel">
+    // Side insets keep content out of a landscape notch (viewport-fit=cover).
+    <header className="border-b-[3px] border-outline bg-panel pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)]">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-4 gap-y-3 px-4 pt-3 pb-3 sm:px-6 md:pb-5 lg:px-10">
         <div className="flex items-center gap-2">
           <Mascot variant="logo" />
@@ -167,7 +168,7 @@ function BottomTabs() {
   return (
     <nav
       aria-label="Section tabs"
-      className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-6 border-t-[3px] border-outline bg-panel pb-[env(safe-area-inset-bottom)] md:hidden"
+      className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-6 border-t-[3px] border-outline bg-panel pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] md:hidden"
     >
       {SECTIONS.map(({ id, label }) => {
         const active = activeSection === id;
@@ -175,7 +176,8 @@ function BottomTabs() {
           <button
             key={id}
             type="button"
-            onClick={() => setActiveSection(id)}
+            // Tapping the current tab again goes back to the top, as phone apps do.
+            onClick={() => (active ? window.scrollTo({ top: 0, behavior: 'smooth' }) : setActiveSection(id))}
             aria-current={active ? 'page' : undefined}
             className={`group relative flex min-h-14 flex-col items-center justify-center gap-0.5 px-0.5 font-display text-[11px] leading-tight font-semibold transition-terminal ${
               active ? 'bg-seal-wash text-ink' : 'text-fog active:bg-panel-2'
@@ -204,6 +206,15 @@ function App() {
     initSectionRouting();
   }, []);
 
+  // A section switch remounts the page: start it at the top instead of at
+  // the old page's scroll offset (clamped somewhere mid-page). Before paint.
+  const shownSection = useRef(activeSection);
+  useLayoutEffect(() => {
+    if (shownSection.current === activeSection) return;
+    shownSection.current = activeSection;
+    window.scrollTo(0, 0);
+  }, [activeSection]);
+
   useEffect(() => {
     if (typeof window.requestIdleCallback === 'function') {
       const handle = window.requestIdleCallback(prefetchPages, { timeout: 3000 });
@@ -227,6 +238,7 @@ function App() {
   return (
     <div className="min-h-screen bg-canvas text-ink transition-terminal">
       <TopBar onOpenPalette={() => setPaletteOpen(true)} />
+      <div className="pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)]">
       <main className="mx-auto max-w-6xl px-4 pt-6 pb-28 sm:px-6 sm:pt-8 md:pb-8 lg:px-10">
         <MovedBanner />
         <ImportHint />
@@ -239,6 +251,7 @@ function App() {
           Local-first — your data never leaves this browser. Game data updates come from this site; only game art is loaded from encore.moe.
         </p>
       </main>
+      </div>
       <BottomTabs />
       <ToastHost />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />

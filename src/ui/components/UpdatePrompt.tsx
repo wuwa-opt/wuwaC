@@ -15,7 +15,7 @@ export function UpdatePrompt() {
   return (
     <div
       role="status"
-      className="animate-tt-toast fixed inset-x-4 top-3 z-50 mx-auto flex max-w-md flex-wrap items-center gap-2 border-2 border-line-strong bg-panel px-3 py-2 text-sm text-ink shadow-lg"
+      className="animate-tt-toast fixed inset-x-4 top-[calc(0.75rem+env(safe-area-inset-top))] z-50 mx-auto flex max-w-md flex-wrap items-center gap-2 border-2 border-line-strong bg-panel px-3 py-2 text-sm text-ink shadow-lg"
     >
       <span className="min-w-0 flex-1">A new version of WuWa Optimizer is available.</span>
       <button type="button" className={`${btnPrimary} ${btnSm}`} onClick={() => void updateServiceWorker(true)}>

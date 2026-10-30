@@ -49,6 +49,34 @@ describe('App shell', () => {
     expect(within(tabs).getByRole('button', { name: /teams/i })).toHaveAttribute('aria-current', 'page');
     expect(useAppStore.getState().activeSection).toBe('teams');
   });
+
+  it('starts a new section at the top, and a second tap on the current tab scrolls up', async () => {
+    const user = userEvent.setup();
+    const scrollTo = vi.spyOn(window, 'scrollTo');
+    render(<App />);
+    await screen.findByRole('heading', { name: /echo inventory/i }, PAGE_LOAD);
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    const tabs = screen.getByRole('navigation', { name: 'Section tabs' });
+    await user.click(within(tabs).getByRole('button', { name: /builds/i }));
+    expect(scrollTo).toHaveBeenCalledWith(0, 0);
+
+    scrollTo.mockClear();
+    await user.click(within(tabs).getByRole('button', { name: /builds/i }));
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(useAppStore.getState().activeSection).toBe('builds');
+    scrollTo.mockRestore();
+  });
+
+  it('locks page scrolling while the command palette is open', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Open command palette' }));
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
+    expect(document.documentElement).toHaveClass('scroll-locked');
+    await user.keyboard('{Escape}');
+    expect(document.documentElement).not.toHaveClass('scroll-locked');
+  });
 });
 
 describe('route-level code splitting', () => {

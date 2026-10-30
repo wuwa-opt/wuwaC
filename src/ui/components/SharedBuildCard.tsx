@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { SharedBuild, Snapshot, StatKey } from '../../data/schema.ts';
 import type { EchoValueFlag, SharedBuildView } from '../../state/share.ts';
 import { sonataName } from '../echoDisplay.ts';
@@ -11,17 +12,30 @@ import { Alert, CostPips } from './ui.tsx';
 const pct = (value: number): string => `${(value * 100).toFixed(1)}%`;
 
 export function StatValue({ stat, value, flag }: { stat: StatKey; value: number; flag?: EchoValueFlag }) {
+  const [open, setOpen] = useState(false);
   const text = `${statLabel(stat)} ${formatStatValue(stat, value)}`;
   if (flag === undefined) return <span>{text}</span>;
   const out = flag.severity === 'out-of-range';
+  // A button, so the reason is a tap away on touch screens (a `title`
+  // tooltip only shows on mouse hover).
   return (
-    <span
-      title={flag.message}
-      className={out ? 'border-b-2 border-ember font-bold text-ember-ink' : 'border-b-2 border-dotted border-line-strong'}
-    >
-      {text}
-      <span className="sr-only">{` (${out ? 'out of range' : 'unverified'}: ${flag.message})`}</span>
-      <span aria-hidden="true">{out ? ' !' : ' ?'}</span>
+    <span>
+      <button
+        type="button"
+        title={flag.message}
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className={`text-left ${out ? 'border-b-2 border-ember font-bold text-ember-ink' : 'border-b-2 border-dotted border-line-strong'}`}
+      >
+        {text}
+        <span className="sr-only">{` (${out ? 'out of range' : 'unverified'}: ${flag.message})`}</span>
+        <span aria-hidden="true">{out ? ' !' : ' ?'}</span>
+      </button>
+      {open && (
+        <span aria-hidden="true" className="block text-xs text-fog">
+          {flag.message}
+        </span>
+      )}
     </span>
   );
 }

@@ -231,7 +231,7 @@ export function TeamAllocation({
                 <span className="min-w-0 flex-1 font-semibold text-ink">{name}</span>
                 <button
                   type="button"
-                  className={`${btnGhost} px-2`}
+                  className={`${btnGhost} px-2 pointer-coarse:min-w-11`}
                   disabled={index === 0 || running}
                   onClick={() => move(index, -1)}
                   aria-label={`Move ${name} up`}
@@ -240,7 +240,7 @@ export function TeamAllocation({
                 </button>
                 <button
                   type="button"
-                  className={`${btnGhost} px-2`}
+                  className={`${btnGhost} px-2 pointer-coarse:min-w-11`}
                   disabled={index === resolved.length - 1 || running}
                   onClick={() => move(index, 1)}
                   aria-label={`Move ${name} down`}

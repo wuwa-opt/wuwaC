@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, fireEvent, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { OwnedEcho, RosterEntry, SharedBuild } from '../../data/schema.ts';
 import { useCalculatorStore } from '../../state/calculator.ts';
@@ -392,7 +392,8 @@ describe('BuildsPage', () => {
     const del = screen.getByRole('button', { name: 'Delete Seeded Build' });
     expect(del).toHaveTextContent(/^Delete$/);
     await user.click(del);
-    expect(useLibraryStore.getState().builds).toEqual([]);
+    // The delete is a Dexie transaction: wait for it, don't race it.
+    await waitFor(() => expect(useLibraryStore.getState().builds).toEqual([]));
     expect(await db.builds.count()).toBe(0);
   });
 

@@ -3,7 +3,9 @@ import { loadBundledSnapshot } from '../data/index.ts';
 import { MAIN_STAT_RANGES, SUB_STAT_TIERS } from '../data/echoStats.ts';
 import type { OwnedEcho, RosterEntry, StatKey } from '../data/schema.ts';
 import { standardMob } from '../domain/damage.ts';
+import { resolveObjectiveSkill, scoreSheet } from '../domain/objectives.ts';
 import { computeStats } from '../domain/stats.ts';
+import { presetsForCharacter, presetToBlocks } from '../data/rotationPresets.ts';
 import {
   costPatterns,
   mergeShardResults,
@@ -660,6 +662,53 @@ describe('exact search equivalence with the brute-force reference', () => {
     }
     // The bounds must actually skip work somewhere, or this proves nothing.
     expect(boundedAway).toBeGreaterThan(0);
+  });
+
+  it('scores every build exactly as scoreSheet does (prepared scorer; rotation with team and windowed buffs, minStats)', () => {
+    const rand = rng(20261030);
+    const bases = computeStats({ character: jiyan, weapon: verdant, roster, echoes: [], sonataSets: allSets });
+    const blocks = presetToBlocks(presetsForCharacter('jiyan')[0]).map((b, i) => ({
+      ...b,
+      durationSeconds: 0.75,
+      activeBuffIds: i % 4 === 0 ? ['verina'] : [],
+    }));
+    const objective: OptimizeRequest['objective'] = {
+      kind: 'rotation-dpr',
+      blocks,
+      buffs: [
+        { id: 'verina', label: 'Verina', source: 'test', mods: [{ stat: 'amplify', value: 0.15 }] },
+        { id: 'window', label: 'Window', source: 'test', mods: [{ stat: 'dmgBonus:heavy', value: 0.38 }, { stat: 'atkPct', value: 0.2 }], windowStartSeconds: 2, windowDurationSeconds: 4 },
+        { id: 'global', label: 'Global', source: 'test', mods: [{ stat: 'critRate', value: 0.125 }] },
+      ],
+      globalBuffIds: ['global'],
+      crit: 'expected',
+    };
+    let checked = 0;
+    for (let trial = 0; trial < 8; trial += 1) {
+      const request: OptimizeRequest = {
+        ...randomRequest(rand),
+        sonataLock: { mode: 'none' },
+        ...(trial % 2 === 0 ? { objective } : {}),
+      };
+      const subject: SearchData = { ...data, echoes: randomInventory(rand, 10 + Math.floor(rand() * 5)), sonataSets: allSets };
+      const ctx = {
+        skill: request.objective.kind === 'expected-damage' ? resolveObjectiveSkill(jiyan.skills, request.objective) : undefined,
+        skills: jiyan.skills,
+        characterId: jiyan.id,
+        attribute: jiyan.attribute,
+        resonanceChain: roster.resonanceChain,
+        attackerLevel: roster.level,
+        enemy: subject.enemy,
+        baseAtk: bases.baseAtk,
+        baseHp: bases.baseHp,
+        baseDef: bases.baseDef,
+      };
+      for (const build of searchExhaustive(subject, request).builds) {
+        expect(build.score).toBe(scoreSheet(request.objective, build.sheet, ctx));
+        checked += 1;
+      }
+    }
+    expect(checked).toBeGreaterThan(10);
   });
 
   it('matches the reference with real Sonata sets (1-, 2-, 3- and 5-piece bonuses)', () => {

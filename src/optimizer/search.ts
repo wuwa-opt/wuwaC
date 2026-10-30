@@ -11,7 +11,7 @@ import type { EnemyProfile } from '../domain/damage.ts';
 import type { ObjectiveSpec } from '../domain/objectives.ts';
 import type { ComputeStatsResult, StatSheet } from '../domain/stats.ts';
 import { computeStats, emptySheet, hasMainEchoBonus } from '../domain/stats.ts';
-import { scoreSheet } from '../domain/objectives.ts';
+import { prepareObjective } from '../domain/objectives.ts';
 import { pruneDominated, pruneInputs } from './prune.ts';
 
 /**
@@ -190,7 +190,7 @@ function prepare(data: SearchData, request: OptimizeRequest): Prepared {
     baseHp: bases.baseHp,
     baseDef: bases.baseDef,
   };
-  const score = (sheet: StatSheet): number => scoreSheet(request.objective, sheet, scoreContext);
+  const score = prepareObjective(request.objective, scoreContext);
   const meetsMinimums = (sheet: StatSheet): boolean =>
     minEntries.every(([stat, minimum]) => sheet[stat] >= minimum);
 

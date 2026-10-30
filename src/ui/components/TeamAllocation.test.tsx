@@ -369,6 +369,24 @@ describe('TeamAllocation', () => {
     }
   });
 
+  it('keeps the screen on while the allocation runs, and releases it on Cancel', async () => {
+    const user = userEvent.setup();
+    const sentinel = { released: false, release: vi.fn(() => ((sentinel.released = true), Promise.resolve())) };
+    const request = vi.fn(() => Promise.resolve(sentinel));
+    Object.defineProperty(navigator, 'wakeLock', { value: { request }, configurable: true });
+    try {
+      const run: RunFn = () => ({ promise: new Promise(() => undefined), cancel: () => undefined, onProgress: () => undefined });
+      renderAllocation({ run });
+      expect(request).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Allocate Echoes' }));
+      await waitFor(() => expect(request).toHaveBeenCalledWith('screen'));
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(sentinel.released).toBe(true));
+    } finally {
+      delete (navigator as { wakeLock?: unknown }).wakeLock;
+    }
+  });
+
   it('cancels a run: workers are cancelled, nothing is previewed, and it can run again', async () => {
     const user = userEvent.setup();
     const cancel = vi.fn();

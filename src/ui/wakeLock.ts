@@ -4,7 +4,8 @@ import { useEffect } from 'react';
  * Keep the screen on while `active` (Screen Wake Lock API). A scan on a
  * phone can take longer than the recording itself (about 1.6× its length
  * with the CPU slowed 4×, 2026-10-30), and a sleeping screen hides the
- * page, which pauses the video walk.
+ * page, which pauses the video walk. Also held while a Calculator search
+ * or a Team allocation runs (minutes on a phone without a Sonata lock).
  *
  * The browser drops the lock whenever the page is hidden, so it is asked
  * for again each time the page is visible while still active. Where the

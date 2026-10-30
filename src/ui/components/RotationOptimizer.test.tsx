@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadBundledSnapshot } from '../../data/index.ts';
@@ -246,6 +246,27 @@ describe('RotationOptimizer progress', () => {
       expect(live.textContent).toBe('Search running, 25% or more checked.');
       // The ticking text is not in the live region and is hidden from assistive tech.
       expect(screen.getByText(/Running for/).closest('[aria-hidden="true"]')).not.toBeNull();
+    });
+
+    it('keeps the screen on while the search runs, and lets it sleep after', async () => {
+      const sentinel = { released: false, release: vi.fn(() => ((sentinel.released = true), Promise.resolve())) };
+      const request = vi.fn(() => Promise.resolve(sentinel));
+      Object.defineProperty(navigator, 'wakeLock', { value: { request }, configurable: true });
+      try {
+        const fake = fakeHandle();
+        run.mockReturnValue(fake.handle);
+        renderOptimizer();
+        expect(request).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole('button', { name: /find best builds/i }));
+        await waitFor(() => expect(request).toHaveBeenCalledWith('screen'));
+        await act(async () => {
+          fake.resolve(resolved);
+          await fake.handle.promise;
+        });
+        await waitFor(() => expect(sentinel.released).toBe(true));
+      } finally {
+        delete (navigator as { wakeLock?: unknown }).wakeLock;
+      }
     });
 
     it('stops the timer when the run finishes', async () => {

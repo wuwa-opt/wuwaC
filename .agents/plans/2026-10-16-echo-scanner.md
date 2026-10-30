@@ -2,6 +2,21 @@
 
 Get the user's in-game Echo inventory (738 Echoes in the 2026-10-16 screenshot) into the app without hand entry. The app reads the game's **Echo Management** detail panel (name, `+level`, Sonata icon, COST, 2 main stats, up to 5 substats, "Equipped by X") from screen pixels, OCRs it in the browser, validates every value against the game's closed vocabularies and discrete roll tables, and stages the result for review before it touches `ownedEchoes`. Multi-session project. Each phase can be verified on its own and leaves the app working.
 
+## Status (2026-10-30, latest): scanning on the phone itself
+
+The user wants to upload on the phone itself and will record a phone video later.
+
+- **Phone emulation** (`e2e-video.mjs` `MOBILE=1`: 412×915 at DPR 2.625, touch, Android Chrome UA; `CPU=n`; `SHOTS=` screenshots):
+  - the 20:9 copy: 14/15 (the miss flagged), 0 silent, JS heap peak 19 MB;
+  - the same with the CPU slowed: 4× 52 s, 8× 95 s for the 32.7 s recording (19 s unslowed), same reads, 0 silent. CDP throttling is approximate: it does not slow the GPU video decoder.
+  - The layout works at phone width. Each review row is about a third of the screen, so with 100+ Echoes the Apply button was a long scroll away.
+- **Changes:**
+  - The screen is kept on while a scan runs (`ui/wakeLock.ts`): a sleeping screen hides the page, and the walk pauses while hidden.
+  - The progress line says to keep the page open and in front.
+  - The Apply / Clear list bar is pinned above the bottom tab bar (bottom of the screen on desktop).
+  - The instructions say "tap or click", and that the phone's own screen recorder works.
+- **Unverified:** a real phone (Android Chrome or iOS Safari). On iOS, whether Photos hands the file input a re-encoded or smaller video is unknown. HEVC plays in Safari and on most Android phones (hardware decoder), so on-device scans avoid the desktop HEVC problem.
+
 ## Status (2026-10-30, later): phone-style recordings
 
 User direction (2026-10-30): no key (arrows, WASD, Tab) moves the Echo grid selection, so auto-advance would need clicks; set aside. Instead, make the video reader robust, including phone recordings (WuWa runs on mobile).

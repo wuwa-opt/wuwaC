@@ -463,6 +463,12 @@ interface Team {
     A black pillarbox still hides the tag: with no set picked, its
     multi-set Echoes are flagged; a picked set applies, as for a region
     capture.
+  - **On a phone** (scanning on the device that recorded): the screen is
+    kept on while a scan runs (`ui/wakeLock.ts`, Screen Wake Lock, asked
+    for again when the page is visible again). The walk pauses while the
+    page is hidden, and the progress line says so. The Apply bar is pinned
+    above the bottom tab bar. With the CPU slowed 4× / 8× in Chromium, a
+    32.7 s recording took 52 / 95 s with the same reads.
   - A frame whose pass 1 shows no panel stops after pass 1. A flagged
     video row re-reads its segment's `alt` frame (`openFrameGrabber`, a
     second <video>) and keeps it only if `parseCost` drops. Same-roll rows that disagree on "Equipped by" start

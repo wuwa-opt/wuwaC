@@ -387,7 +387,11 @@ describe('BuildsPage', () => {
     render(<BuildsPage />);
     await screen.findByText('Seeded Build');
 
-    await user.click(screen.getByRole('button', { name: /delete/i }));
+    // The visible label stays short (a long build name overflowed phones);
+    // the accessible name still says which build.
+    const del = screen.getByRole('button', { name: 'Delete Seeded Build' });
+    expect(del).toHaveTextContent(/^Delete$/);
+    await user.click(del);
     expect(useLibraryStore.getState().builds).toEqual([]);
     expect(await db.builds.count()).toBe(0);
   });

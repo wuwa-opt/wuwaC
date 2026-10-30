@@ -499,6 +499,12 @@ describe('BuildsPage', () => {
     expect(within(stats).getByText('Crit Rate')).toBeInTheDocument();
     expect(within(preview).getByText(/1 value falls outside/i)).toBeInTheDocument();
     expect(within(preview).getByText(/out of range: 5★ \+25 value is 0\.22/i)).toBeInTheDocument();
+    // The reason is a tap away (no hover on phones).
+    const flagged = within(preview).getByRole('button', { name: /out of range/i });
+    expect(flagged).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(flagged);
+    expect(flagged).toHaveAttribute('aria-expanded', 'true');
+    expect(flagged.nextElementSibling).toHaveTextContent(/5★ \+25 value is 0\.22/);
     expect(await db.builds.count()).toBe(0);
   });
 

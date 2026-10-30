@@ -664,6 +664,23 @@ describe('exact search equivalence with the brute-force reference', () => {
     expect(boundedAway).toBeGreaterThan(0);
   });
 
+  it('gives the same merged result for any worker count (1, 2, 4, 7, 8 shards)', () => {
+    // The worker count now depends on the device (fewer on phones,
+    // `defaultConcurrency`), so the answer must not depend on it.
+    const rand = rng(20261030);
+    for (let trial = 0; trial < 12; trial += 1) {
+      const inventory = randomInventory(rand, 9 + Math.floor(rand() * 6));
+      const request = randomRequest(rand);
+      const subject: SearchData = { ...data, echoes: inventory, sonataSets: allSets };
+      const single = searchExhaustive(subject, request);
+      for (const count of [1, 2, 4, 7, 8]) {
+        const shards = Array.from({ length: count }, (_, index) => searchExhaustive(subject, request, undefined, { index, count }));
+        expect(shards.reduce((sum, r) => sum + r.evaluated, 0), `trial ${trial}, ${count} shards: coverage`).toBe(single.total);
+        expect(mergeShardResults(subject, request.topN, shards).builds, `trial ${trial}, ${count} shards`).toEqual(single.builds);
+      }
+    }
+  }, 30_000);
+
   it('scores every build exactly as scoreSheet does (prepared scorer; rotation with team and windowed buffs, minStats)', () => {
     const rand = rng(20261030);
     const bases = computeStats({ character: jiyan, weapon: verdant, roster, echoes: [], sonataSets: allSets });

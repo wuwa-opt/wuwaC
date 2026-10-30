@@ -33,14 +33,57 @@ export interface RunOptimizationDeps {
 /** Pools this small finish in well under a second on one worker. */
 const SMALL_POOL = 40;
 const MAX_WORKERS = 8;
+/**
+ * Phones: their CPUs pair a few fast cores with slow ones, run hot and are
+ * short on memory. Measured 2026-10-30 (240-Echo, 37-set seed inventory,
+ * `npm run bench`): pinned to 4 cores, 4 workers took 13.9 s and 7 took
+ * 14.9 s (oversubscribed); on 12 threads 4 took 14.6 s and 7 took 12.5 s.
+ * Each worker added ~17-20 MB in Chromium.
+ */
+const PHONE_MAX_WORKERS = 4;
+/** Under 4 GB (`navigator.deviceMemory`, Chromium only: 0.25 … 8). */
+const LOW_MEMORY_MAX_WORKERS = 2;
+
+/** What the device says about itself (`readDeviceHints`); all optional. */
+export interface DeviceHints {
+  /** A phone or tablet: Chromium's `userAgentData.mobile`, or touch with no fine pointer at all. */
+  phone?: boolean;
+  deviceMemoryGb?: number;
+}
 
 /**
  * Workers for a pool of `poolSize` echoes: one for small pools, else one per
- * logical core minus one for the page, capped at 8.
+ * logical core minus one for the page, capped at 8, at 4 on a phone and at
+ * 2 under 4 GB of memory. The search is sharded deterministically, so the
+ * count changes only the time, never the result.
  */
-export function defaultConcurrency(poolSize: number, hardwareConcurrency: number | undefined): number {
+export function defaultConcurrency(
+  poolSize: number,
+  hardwareConcurrency: number | undefined,
+  device: DeviceHints = {},
+): number {
   if (poolSize < SMALL_POOL) return 1;
-  return Math.min(MAX_WORKERS, Math.max(1, (hardwareConcurrency ?? 2) - 1));
+  let cap = MAX_WORKERS;
+  if (device.phone === true) cap = Math.min(cap, PHONE_MAX_WORKERS);
+  if (device.deviceMemoryGb !== undefined && device.deviceMemoryGb < 4) cap = Math.min(cap, LOW_MEMORY_MAX_WORKERS);
+  return Math.min(cap, Math.max(1, (hardwareConcurrency ?? 2) - 1));
+}
+
+/**
+ * Read `DeviceHints` from the browser. Touch-only means a coarse primary
+ * pointer and no fine pointer anywhere, so a touch-screen laptop (it has a
+ * trackpad) is not a phone.
+ */
+export function readDeviceHints(): DeviceHints {
+  if (typeof navigator === 'undefined') return {};
+  const nav = navigator as Navigator & { userAgentData?: { mobile?: boolean }; deviceMemory?: number };
+  const media = (query: string): boolean =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(query).matches;
+  const touchOnly = media('(pointer: coarse)') && !media('(any-pointer: fine)');
+  return {
+    phone: nav.userAgentData?.mobile === true || touchOnly,
+    ...(typeof nav.deviceMemory === 'number' ? { deviceMemoryGb: nav.deviceMemory } : {}),
+  };
 }
 
 /** Post a search to worker shards; resolves with the merged result, rejects on any error. */
@@ -51,7 +94,7 @@ export function runOptimization(
 ): OptimizationHandle {
   const createWorker = deps.createWorker ?? defaultCreateWorker;
   const cores = typeof navigator === 'undefined' ? undefined : navigator.hardwareConcurrency;
-  const count = Math.max(1, Math.floor(deps.concurrency ?? defaultConcurrency(data.echoes.length, cores)));
+  const count = Math.max(1, Math.floor(deps.concurrency ?? defaultConcurrency(data.echoes.length, cores, readDeviceHints())));
   const id = nextId();
   const workers: WorkerLike[] = [];
   const covered = new Array<number>(count).fill(0);

@@ -1,10 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createProgressTracker,
   isWorkerOut,
   progressStep,
 } from './protocol.ts';
-import { defaultConcurrency, runOptimization, type WorkerLike } from './worker.ts';
+import { defaultConcurrency, readDeviceHints, runOptimization, type WorkerLike } from './worker.ts';
 import type { RunMessage } from './protocol.ts';
 import type { OwnedEcho } from '../data/schema.ts';
 import type { RankedBuild, SearchData, SearchResult } from './search.ts';
@@ -85,6 +85,55 @@ describe('defaultConcurrency', () => {
     expect(defaultConcurrency(200, 16)).toBe(8);
     expect(defaultConcurrency(200, 1)).toBe(1);
     expect(defaultConcurrency(200, undefined)).toBe(1);
+  });
+
+  it('caps a phone at 4 and a device under 4 GB at 2, never raising the count', () => {
+    expect(defaultConcurrency(200, 8, { phone: true })).toBe(4);
+    expect(defaultConcurrency(200, 8, { phone: false })).toBe(7);
+    expect(defaultConcurrency(200, 4, { phone: true })).toBe(3);
+    expect(defaultConcurrency(200, 8, { phone: true, deviceMemoryGb: 2 })).toBe(2);
+    expect(defaultConcurrency(200, 8, { deviceMemoryGb: 4 })).toBe(7);
+    expect(defaultConcurrency(200, 16, { deviceMemoryGb: 8 })).toBe(8);
+    expect(defaultConcurrency(200, 2, { deviceMemoryGb: 0.5 })).toBe(1);
+    expect(defaultConcurrency(39, 8, { phone: true })).toBe(1);
+  });
+});
+
+describe('readDeviceHints', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const stub = (nav: object, matches: Record<string, boolean>): void => {
+    vi.stubGlobal('navigator', nav);
+    vi.stubGlobal('window', { matchMedia: (query: string) => ({ matches: matches[query] ?? false }) });
+  };
+
+  it('calls a touch-only device a phone, but not a touch laptop with a trackpad', () => {
+    stub({}, { '(pointer: coarse)': true, '(any-pointer: fine)': false });
+    expect(readDeviceHints()).toEqual({ phone: true });
+    stub({}, { '(pointer: coarse)': true, '(any-pointer: fine)': true });
+    expect(readDeviceHints()).toEqual({ phone: false });
+    stub({}, { '(pointer: fine)': true, '(any-pointer: fine)': true });
+    expect(readDeviceHints()).toEqual({ phone: false });
+  });
+
+  it("trusts Chromium's userAgentData.mobile and reads deviceMemory", () => {
+    stub({ userAgentData: { mobile: true }, deviceMemory: 4 }, { '(any-pointer: fine)': true });
+    expect(readDeviceHints()).toEqual({ phone: true, deviceMemoryGb: 4 });
+  });
+
+  it('runs a big pool on 4 workers on an 8-core phone', () => {
+    stub({ hardwareConcurrency: 8, userAgentData: { mobile: true } }, {});
+    const created: FakeWorker[] = [];
+    const echoes = Array.from({ length: 200 }, (_, i) => ({ id: `e${i}` }));
+    runOptimization({ echoes } as never, { topN: 5 } as never, {
+      createWorker: () => {
+        const worker = new FakeWorker();
+        created.push(worker);
+        return worker;
+      },
+    }).cancel();
+    expect(created).toHaveLength(4);
   });
 });
 

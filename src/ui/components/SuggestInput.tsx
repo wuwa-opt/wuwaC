@@ -123,7 +123,7 @@ export function SuggestInput({
                     onMouseMove={() => {
                       if (i !== highlight) setHighlight(i);
                     }}
-                    className={`flex w-full items-baseline justify-between gap-2 px-2 py-1.5 text-left text-sm transition-terminal ${
+                    className={`flex w-full items-baseline justify-between gap-2 px-2 py-1.5 text-left text-sm transition-terminal pointer-coarse:min-h-11 pointer-coarse:items-center ${
                       i === current ? 'bg-panel-2 text-ink' : 'text-fog'
                     }`}
                   >

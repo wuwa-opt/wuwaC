@@ -399,8 +399,8 @@ export function EchoScanner({ onClose, onApplied }: { onClose: () => void; onApp
               </details>
             )}
 
-            {/* Pinned to the bottom of the screen while the list scrolls (above the phone tab bar: App.tsx BottomTabs, min-h-14 + 3px border). */}
-            <div className="sticky bottom-[calc(3.5rem+3px+env(safe-area-inset-bottom))] z-10 -mx-4 mt-4 flex flex-wrap gap-2 border-t-[3px] border-outline bg-panel px-4 py-3 md:bottom-0">
+            {/* Pinned to the bottom of the screen while the list scrolls, above the phone tab bar (--tabbar-offset, 0 from md up). */}
+            <div className="sticky bottom-(--tabbar-offset) z-10 -mx-4 mt-4 flex flex-wrap gap-2 border-t-[3px] border-outline bg-panel px-4 py-3">
               <button
                 type="button"
                 disabled={plan.add.length + updates + deletes === 0}

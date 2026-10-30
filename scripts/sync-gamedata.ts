@@ -100,7 +100,7 @@ async function main(): Promise<void> {
   let charactersOut = parts.characters;
   let weaponsOut = parts.weapons;
   if (!flags.chars || !flags.weapons) {
-    let prev: Snapshot | null = null;
+    let prev: Snapshot | null;
     try {
       prev = snapshotSchema.parse(JSON.parse(readFileSync('src/data/generated/snapshot.json', 'utf8')));
     } catch {

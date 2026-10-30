@@ -163,12 +163,17 @@ describe('reviewRows', () => {
       [false, null, true],
       [false, 0, false],
     ]);
-    expect(summarize(withOwned)).toEqual({ total: 3, reading: 0, ready: 3, review: 0, fix: 0, failed: 0, known: 1, repeats: 1, included: 1 });
+    expect(summarize(withOwned)).toEqual({ total: 3, reading: 0, ready: 3, review: 0, fix: 0, failed: 0, known: 1, repeats: 1, included: 1, adds: 1, updates: 0 });
 
-    // An explicit tick overrides either default (e.g. two truly identical Echoes).
+    // An explicit tick overrides the repeat default (e.g. two truly identical
+    // Echoes); the owned one, unchanged, has nothing to apply either way.
     useScanStore.getState().setInclude(items[0].id, true);
     useScanStore.getState().setInclude(items[2].id, true);
-    expect(reviewRows(useScanStore.getState().items, [owned]).map((r) => r.included)).toEqual([true, true, true]);
+    expect(reviewRows(useScanStore.getState().items, [owned]).map((r) => [r.change, r.included])).toEqual([
+      ['none', false],
+      ['add', true],
+      ['add', true],
+    ]);
   });
 
   it('ticks neither copy when same-roll rows disagree on who wears the Echo', async () => {

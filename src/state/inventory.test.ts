@@ -2,6 +2,8 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadBundledSnapshot } from '../data/index.ts';
 import { ownedEchoSchema } from '../data/schema.ts';
+import type { ScanDraft } from '../scanner/draft.ts';
+import type { SyncPlan } from '../scanner/sync.ts';
 import { db } from './db.ts';
 import { useInventoryStore, type EchoDraft, type EchoFormDraft } from './inventory.ts';
 import { resetSnapshotStoreForTests, useSnapshotStore } from './snapshotStore.ts';
@@ -601,5 +603,128 @@ describe('inventory store: active snapshot', () => {
     expect(updated.level).toBe(10);
     const [imported] = await store.importEchoes([newDef()], 'import:test');
     expect(imported.echoDefId).toBe('published-later');
+  });
+});
+
+describe('inventory store: applying a scan', () => {
+  /** What the scanner produces: no nickname, a wearer that is always read. */
+  const scanned = (over: Partial<ScanDraft> = {}): ScanDraft => ({
+    echoDefId: 'hooscamp',
+    sonataId: 'sierra-gale',
+    cost: 1,
+    level: 25,
+    rarity: 5,
+    mainStat: { stat: 'atkPct', value: 0.18 },
+    secondMainStat: { stat: 'hp', value: 2280 },
+    substats: [
+      { stat: 'critRate', value: 0.063 },
+      { stat: 'critDmg', value: 0.126 },
+    ],
+    equippedTo: null,
+    ...over,
+  });
+
+  const seed = async () => {
+    const store = useInventoryStore.getState();
+    const old = await store.addEcho({
+      ...draft,
+      label: 'keeper',
+      level: 10,
+      mainStat: { stat: 'atkPct', value: 0.081 },
+      substats: [{ stat: 'critRate', value: 0.063, rolls: 2 }],
+    });
+    await store.setLocked([old.id], true);
+    const moved = await store.addEcho({ ...draft, equippedTo: 'jiyan' });
+    const gone = await store.addEcho({ ...draft, label: 'gone' });
+    const locked = await store.addEcho({ ...draft, label: 'locked' });
+    await store.setLocked([locked.id], true);
+    return { old: { ...old, locked: true as const }, moved, gone, locked: { ...locked, locked: true as const } };
+  };
+
+  const plan = (ids: Awaited<ReturnType<typeof seed>>): SyncPlan => ({
+    add: [scanned({ level: 20 })],
+    upgrade: [{ id: ids.old.id, draft: scanned({ equippedTo: 'verina' }) }],
+    equip: [{ id: ids.moved.id, equippedTo: 'yangyang' }],
+    remove: [ids.gone.id, ids.locked.id],
+  });
+
+  it('adds, upgrades in place, re-equips and deletes in Dexie and state', async () => {
+    const ids = await seed();
+    const applied = await useInventoryStore.getState().applyScan(plan(ids), 'import:screen-scan');
+
+    const upgraded = {
+      echoDefId: 'hooscamp',
+      sonataId: 'sierra-gale',
+      cost: 1,
+      level: 25,
+      rarity: 5,
+      mainStat: { stat: 'atkPct', value: 0.18 },
+      secondMainStat: { stat: 'hp', value: 2280 },
+      // The unchanged substat keeps its roll count; the new one has none.
+      substats: [
+        { stat: 'critRate', value: 0.063, rolls: 2 },
+        { stat: 'critDmg', value: 0.126 },
+      ],
+      equippedTo: 'verina',
+      id: ids.old.id,
+      origin: 'manual',
+      label: 'keeper',
+      locked: true,
+    };
+    expect(await db.ownedEchoes.get(ids.old.id)).toEqual(upgraded);
+    expect(await db.ownedEchoes.get(ids.moved.id)).toEqual({ ...ids.moved, equippedTo: 'yangyang' });
+    expect(await db.ownedEchoes.get(ids.gone.id)).toBeUndefined();
+    expect(await db.ownedEchoes.get(ids.locked.id)).toEqual(ids.locked); // locked: never deleted
+    expect(applied.added).toHaveLength(1);
+    expect(applied.added[0]).toMatchObject({ level: 20, origin: 'import:screen-scan', equippedTo: null });
+    expect(applied.before).toEqual([ids.old, ids.moved]);
+    expect(applied.removed).toEqual([ids.gone]);
+
+    const inState = new Map(useInventoryStore.getState().echoes.map((e) => [e.id, e]));
+    expect([...inState.keys()].sort()).toEqual([ids.old.id, ids.moved.id, ids.locked.id, applied.added[0].id].sort());
+    expect(inState.get(ids.old.id)).toEqual(upgraded);
+  });
+
+  it('writes nothing when a row to update is gone (the inventory changed since the review)', async () => {
+    const ids = await seed();
+    await db.ownedEchoes.delete(ids.moved.id);
+    const before = await db.ownedEchoes.toArray();
+    await expect(useInventoryStore.getState().applyScan(plan(ids), 'import:screen-scan')).rejects.toThrow(/review the scan again/);
+    expect(await db.ownedEchoes.toArray()).toEqual(before);
+  });
+
+  it('undoScan reverts every change', async () => {
+    const ids = await seed();
+    const before = (await db.ownedEchoes.toArray()).sort((a, b) => a.id.localeCompare(b.id));
+    const store = useInventoryStore.getState();
+    const applied = await store.applyScan(plan(ids), 'import:screen-scan');
+
+    expect(await store.undoScan(applied)).toEqual({ restored: 4, skipped: 0 });
+    expect((await db.ownedEchoes.toArray()).sort((a, b) => a.id.localeCompare(b.id))).toEqual(before);
+    expect([...useInventoryStore.getState().echoes].sort((a, b) => a.id.localeCompare(b.id))).toEqual(before);
+  });
+
+  it('undoScan leaves rows changed since as they are', async () => {
+    const ids = await seed();
+    const store = useInventoryStore.getState();
+    const applied = await store.applyScan(plan(ids), 'import:screen-scan');
+    await store.reassignEquipped([{ id: ids.moved.id, equippedTo: 'calcharo' }]);
+    await store.replaceEcho(applied.added[0].id, { ...draft, level: 5 });
+
+    expect(await store.undoScan(applied)).toEqual({ restored: 2, skipped: 2 });
+    expect((await db.ownedEchoes.get(ids.moved.id))?.equippedTo).toBe('calcharo');
+    expect((await db.ownedEchoes.get(applied.added[0].id))?.level).toBe(5);
+    expect(await db.ownedEchoes.get(ids.old.id)).toEqual(ids.old);
+    expect(await db.ownedEchoes.get(ids.gone.id)).toEqual(ids.gone);
+  });
+
+  it('a failing applyScan transaction rolls back and leaves state and Dexie untouched', async () => {
+    const ids = await seed();
+    const before = await db.ownedEchoes.toArray();
+    const echoes = useInventoryStore.getState().echoes;
+    vi.spyOn(db.ownedEchoes, 'bulkDelete').mockRejectedValue(new Error('disk full'));
+    await expect(useInventoryStore.getState().applyScan(plan(ids), 'import:screen-scan')).rejects.toThrow('disk full');
+    expect(await db.ownedEchoes.toArray()).toEqual(before);
+    expect(useInventoryStore.getState().echoes).toEqual(echoes);
   });
 });

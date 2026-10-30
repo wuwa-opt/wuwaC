@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { findEchoDef } from '../data/index.ts';
 import { ownedEchoSchema, type EchoDefData, type OwnedEcho } from '../data/schema.ts';
+import type { ScanDraft } from '../scanner/draft.ts';
+import type { SyncPlan } from '../scanner/sync.ts';
 import { db } from './db.ts';
 import { useSnapshotStore } from './snapshotStore.ts';
 
@@ -85,6 +87,42 @@ export interface EquipAssignment {
   equippedTo: string | null;
 }
 
+/** What `applyScan` wrote, for `undoScan`. */
+export interface ScanApplied {
+  added: OwnedEcho[];
+  /** Rows an upgrade or "Equipped by" change touched: as they were, and as written (same order). */
+  before: OwnedEcho[];
+  after: OwnedEcho[];
+  removed: OwnedEcho[];
+}
+
+/**
+ * A levelled-up Echo's new row: the scanned fields replace the stored
+ * ones, and it keeps its id (builds point at it), origin, nickname, lock
+ * and the `rolls` of every substat that did not change.
+ */
+function upgradedRow(was: OwnedEcho, draft: ScanDraft): OwnedEcho {
+  const label = draft.label ?? was.label;
+  return ownedEchoSchema.parse({
+    echoDefId: draft.echoDefId,
+    sonataId: draft.sonataId,
+    cost: draft.cost,
+    level: draft.level,
+    rarity: draft.rarity,
+    mainStat: draft.mainStat,
+    ...(draft.secondMainStat !== undefined ? { secondMainStat: draft.secondMainStat } : {}),
+    substats: keepRolls(draft.substats, was.substats),
+    equippedTo: draft.equippedTo,
+    id: was.id,
+    origin: was.origin,
+    ...(label !== undefined ? { label } : {}),
+    ...(was.locked === true ? { locked: true } : {}),
+  });
+}
+
+/** Same row, field for field (rows read back keep their key order). */
+const sameRow = (a: OwnedEcho | undefined, b: OwnedEcho): boolean => a !== undefined && JSON.stringify(a) === JSON.stringify(b);
+
 interface InventoryState {
   echoes: OwnedEcho[];
   loaded: boolean;
@@ -147,6 +185,20 @@ interface InventoryState {
    * row throws with its index instead of landing half-imported.
    */
   importEchoes: (drafts: EchoDraft[], origin: string) => Promise<OwnedEcho[]>;
+  /**
+   * Apply a reviewed scan (`scanner/sync.ts` `planSync`) in one Dexie
+   * transaction: add new Echoes under `origin`, update levelled-up ones in
+   * place, set "Equipped by" (the scan wins), and delete the rows the user
+   * ticked (locked ones are skipped). If a row to update is gone, nothing
+   * is written. Resolves to what changed, for `undoScan`.
+   */
+  applyScan: (plan: SyncPlan, origin: string) => Promise<ScanApplied>;
+  /**
+   * Undo `applyScan` in one transaction, row by row: only a row still exactly
+   * as the scan left it is reverted (an added row deleted, an updated row put
+   * back, a deleted row re-added if its id is free). Others are skipped.
+   */
+  undoScan: (applied: ScanApplied) => Promise<{ restored: number; skipped: number }>;
 }
 
 function toRow(draft: EchoDraft, id: string, origin = 'manual'): OwnedEcho {
@@ -297,5 +349,72 @@ export const useInventoryStore = create<InventoryState>()((set, get) => ({
     await db.ownedEchoes.bulkAdd(rows);
     set((s) => ({ echoes: [...s.echoes, ...rows] }));
     return rows;
+  },
+
+  applyScan: async (plan, origin) => {
+    const added = plan.add.map((draft, i) => {
+      try {
+        return toRow(draft, crypto.randomUUID(), origin);
+      } catch (err) {
+        throw new Error(`scan row ${i + 1}: ${err instanceof Error ? err.message : 'invalid'}`);
+      }
+    });
+    for (const { draft } of plan.upgrade) assertDefConsistent(draft);
+    const applied = await db.transaction('rw', db.ownedEchoes, async () => {
+      const ids = [...plan.upgrade.map((u) => u.id), ...plan.equip.map((e) => e.id)];
+      const rows = await db.ownedEchoes.bulkGet(ids);
+      if (rows.some((row) => row === undefined)) {
+        throw new Error('Your inventory changed since this scan was checked against it. Nothing was saved; review the scan again.');
+      }
+      const before: OwnedEcho[] = [];
+      const after: OwnedEcho[] = [];
+      plan.upgrade.forEach((u, i) => {
+        before.push(rows[i]!);
+        after.push(upgradedRow(rows[i]!, u.draft));
+      });
+      plan.equip.forEach((e, j) => {
+        const was = rows[plan.upgrade.length + j]!;
+        if ((was.equippedTo ?? null) === e.equippedTo) return;
+        before.push(was);
+        after.push({ ...was, equippedTo: e.equippedTo });
+      });
+      const removed = (await db.ownedEchoes.bulkGet(plan.remove)).filter(
+        (row): row is OwnedEcho => row !== undefined && !row.locked,
+      );
+      await db.ownedEchoes.bulkAdd(added);
+      await db.ownedEchoes.bulkPut(after);
+      await db.ownedEchoes.bulkDelete(removed.map((row) => row.id));
+      return { added, before, after, removed };
+    });
+    const written = new Map(applied.after.map((row) => [row.id, row]));
+    const gone = new Set(applied.removed.map((row) => row.id));
+    set((s) => ({
+      echoes: [...s.echoes.filter((e) => !gone.has(e.id)).map((e) => written.get(e.id) ?? e), ...applied.added],
+    }));
+    return applied;
+  },
+
+  undoScan: async (applied) => {
+    const { drop, back, readd } = await db.transaction('rw', db.ownedEchoes, async () => {
+      const addedNow = await db.ownedEchoes.bulkGet(applied.added.map((row) => row.id));
+      const afterNow = await db.ownedEchoes.bulkGet(applied.after.map((row) => row.id));
+      const removedNow = await db.ownedEchoes.bulkGet(applied.removed.map((row) => row.id));
+      const result = {
+        drop: applied.added.filter((row, i) => sameRow(addedNow[i], row)),
+        back: applied.before.filter((_, i) => sameRow(afterNow[i], applied.after[i])),
+        readd: applied.removed.filter((_, i) => removedNow[i] === undefined),
+      };
+      await db.ownedEchoes.bulkDelete(result.drop.map((row) => row.id));
+      await db.ownedEchoes.bulkPut(result.back);
+      await db.ownedEchoes.bulkAdd(result.readd);
+      return result;
+    });
+    const dropped = new Set(drop.map((row) => row.id));
+    const reverted = new Map(back.map((row) => [row.id, row]));
+    set((s) => ({
+      echoes: [...s.echoes.filter((e) => !dropped.has(e.id)).map((e) => reverted.get(e.id) ?? e), ...readd],
+    }));
+    const restored = drop.length + back.length + readd.length;
+    return { restored, skipped: applied.added.length + applied.after.length + applied.removed.length - restored };
   },
 }));

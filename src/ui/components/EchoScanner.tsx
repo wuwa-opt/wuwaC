@@ -2,7 +2,8 @@ import { useRef, useState, type DragEvent } from 'react';
 import type { Snapshot } from '../../data/schema.ts';
 import { SCAN_ORIGIN } from '../../scanner/draft.ts';
 import { reviewRows, summarize, type ReviewRow } from '../../scanner/review.ts';
-import { useInventoryStore, type EchoFormDraft } from '../../state/inventory.ts';
+import { planSync } from '../../scanner/sync.ts';
+import { useInventoryStore, type EchoFormDraft, type ScanApplied } from '../../state/inventory.ts';
 import { useScanStore } from '../../state/scanStore.ts';
 import { useSnapshotStore } from '../../state/snapshotStore.ts';
 import { formatStatValue, statLabel, toDisplayValue } from '../format.ts';
@@ -13,10 +14,12 @@ import { Alert, CostPips, EmptyState, Window } from './ui.tsx';
 /**
  * Echo scanner window: screenshots or a screen recording of the in-game
  * Echo Management detail panel -> OCR (scanner layer, off the main
- * thread) -> review -> import.
+ * thread) -> review -> import. A rescan updates the inventory instead of
+ * adding copies: known Echoes keep their rows, levelled-up ones are updated
+ * in place, and the scan's "Equipped by" wins.
  * Rendering and input only; every decision (what a read means, whether a
- * row is importable, whether it is already owned) comes from
- * `scanner/review.ts`.
+ * row is importable, which owned Echo it is) comes from `scanner/review.ts`
+ * and `scanner/sync.ts`.
  */
 
 const RARITIES = [5, 4, 3, 2] as const;
@@ -62,10 +65,10 @@ function formValues(row: ReviewRow): EchoFormValues {
   };
 }
 
-export function EchoScanner({ onClose, onImported }: { onClose: () => void; onImported: (count: number) => void }) {
+export function EchoScanner({ onClose, onApplied }: { onClose: () => void; onApplied: (applied: ScanApplied) => void }) {
   const snapshot = useSnapshotStore((s) => s.snapshot);
   const owned = useInventoryStore((s) => s.echoes);
-  const importEchoes = useInventoryStore((s) => s.importEchoes);
+  const applyScan = useInventoryStore((s) => s.applyScan);
   const {
     batch,
     items,
@@ -86,10 +89,26 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
   const [fixing, setFixing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  /** "Not in this scan" rows ticked for deletion. */
+  const [toDelete, setToDelete] = useState<ReadonlySet<string>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
 
   const rows = reviewRows(items, owned);
   const summary = summarize(rows);
+  const { plan, notSeen, bagged, overfull } = planSync(rows, owned, toDelete);
+  const baggedFrom = new Map(bagged.map((b) => [b.id, b.from]));
+  const deletes = plan.remove.length;
+  const updates = plan.upgrade.length + plan.equip.length;
+  const applyLabel =
+    updates === 0 && deletes === 0
+      ? `Add ${plan.add.length} ${plan.add.length === 1 ? 'echo' : 'echoes'}`
+      : `Apply: ${[
+          plan.add.length > 0 ? `add ${plan.add.length}` : null,
+          updates > 0 ? `update ${updates}` : null,
+          deletes > 0 ? `delete ${deletes}` : null,
+        ]
+          .filter((x) => x !== null)
+          .join(' · ')}`;
   const inBatch = rows.filter((r) => (r.draft?.sonataId ?? r.item.parse?.echo.sonataId) === batch.sonataId).length;
 
   const add = (files: FileList | File[] | null): void => {
@@ -113,14 +132,14 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
     add(e.dataTransfer.files);
   };
 
-  const importIncluded = (): void => {
-    const chosen = rows.filter((r) => r.included && r.draft !== null);
-    const drafts = chosen.map((r) => r.draft!);
-    importEchoes(drafts, SCAN_ORIGIN)
-      .then(() => {
-        clear(chosen.map((r) => r.item.id));
+  const apply = (): void => {
+    const applied = rows.filter((r) => r.included).map((r) => r.item.id);
+    applyScan(plan, SCAN_ORIGIN)
+      .then((result) => {
+        clear(applied);
+        setToDelete(new Set());
         setError(null);
-        onImported(drafts.length);
+        onApplied(result);
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Import failed.'));
   };
@@ -285,6 +304,7 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
                 summary.fix > 0 ? `${summary.fix} to fix` : null,
                 summary.failed > 0 ? `${summary.failed} unreadable` : null,
                 summary.known > 0 ? `${summary.known} already in your inventory` : null,
+                summary.updates > 0 ? `${summary.updates} to update` : null,
                 summary.repeats > 0 ? `${summary.repeats} scanned twice` : null,
               ]
                 .filter((x) => x !== null)
@@ -317,9 +337,71 @@ export function EchoScanner({ onClose, onImported }: { onClose: () => void; onIm
               ))}
             </ul>
 
+            {overfull.map((o) => (
+              <Alert key={o.characterId} tone="warning" className="mt-4">
+                {`This scan shows ${o.count} Echoes equipped by ${name(snapshot, 'character', o.characterId)}, but a character wears 5 at most. One of the "Equipped by" lines was misread, or the gear changed during the recording. Untick the wrong rows.`}
+              </Alert>
+            ))}
+
+            {notSeen.length > 0 && (
+              <details className="mt-4 border-2 border-line-strong bg-panel-2 p-2 text-sm">
+                <summary className="cursor-pointer font-bold text-ink">
+                  {`Not in this scan: ${notSeen.length} ${notSeen.length === 1 ? 'Echo' : 'Echoes'} in your inventory`}
+                  {deletes > 0 ? ` · ${deletes} to delete` : ''}
+                  {bagged.length > 0 ? ` · ${bagged.length} back to the bag` : ''}
+                </summary>
+                <p className="mt-2 text-xs text-fog">
+                  Echoes of the Sonata sets this scan covered that no row matched: gone in game, or just not clicked.
+                  Nothing is deleted unless you tick it.
+                </p>
+                {summary.fix + summary.reading > 0 && (
+                  <p className="mt-1 text-xs text-amber">
+                    Some rows above are not read yet or need a fix; their Echoes may be listed here.
+                  </p>
+                )}
+                <ul className="mt-2 space-y-1">
+                  {notSeen.map((e) => {
+                    const from = baggedFrom.get(e.id);
+                    return (
+                      <li key={e.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                        <span className="font-bold text-ink">{e.label ?? name(snapshot, 'echo', e.echoDefId)}</span>
+                        <span className="text-fog">{`+${e.level} · ${statLabel(e.mainStat.stat)} ${formatStatValue(e.mainStat.stat, e.mainStat.value)}`}</span>
+                        {from !== undefined ? (
+                          <span className="text-amber">{`back to the bag: ${name(snapshot, 'character', from)} wears 5 scanned Echoes`}</span>
+                        ) : (
+                          e.equippedTo != null && <span className="text-fog">{`Equipped by ${name(snapshot, 'character', e.equippedTo)}`}</span>
+                        )}
+                        <label className="ml-auto flex items-center gap-1 font-bold text-ink">
+                          <input
+                            type="checkbox"
+                            checked={toDelete.has(e.id) && e.locked !== true}
+                            disabled={e.locked === true}
+                            onChange={(ev) =>
+                              setToDelete((cur) => {
+                                const next = new Set(cur);
+                                if (ev.target.checked) next.add(e.id);
+                                else next.delete(e.id);
+                                return next;
+                              })
+                            }
+                          />
+                          {e.locked === true ? 'Locked' : 'Delete'}
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </details>
+            )}
+
             <div className="mt-4 flex flex-wrap gap-2">
-              <button type="button" disabled={summary.included === 0} onClick={importIncluded} className={btnPrimary}>
-                {`Add ${summary.included} ${summary.included === 1 ? 'echo' : 'echoes'}`}
+              <button
+                type="button"
+                disabled={plan.add.length + updates + deletes === 0}
+                onClick={apply}
+                className={btnPrimary}
+              >
+                {applyLabel}
               </button>
               <button type="button" onClick={() => clear()} className={btnOutline}>
                 Clear list
@@ -392,7 +474,20 @@ function ScanRow({
             )}
             <span className={`text-xs font-bold ${STATE_CLASS[state]}`}>{STATE_LABEL[state]}</span>
             {row.known && <span className="text-xs text-fog">already in inventory</span>}
+            {row.match?.kind === 'upgrade' && row.owned !== null && (
+              <span className="text-xs text-fog">{`levelled up from your +${row.owned.level} copy`}</span>
+            )}
           </div>
+          {row.known && row.change === 'update' && row.owned !== null && (
+            <p className="mt-1 text-xs text-fog">
+              {`Your inventory has it ${row.owned.equippedTo == null ? 'unequipped' : `on ${name(snapshot, 'character', row.owned.equippedTo)}`}; this scan updates that.`}
+            </p>
+          )}
+          {row.match?.kind === 'new' && row.match.upgradeCandidates > 0 && (
+            <p className="mt-1 text-xs text-amber">
+              {`It may be a levelled-up copy of ${row.match.upgradeCandidates === 1 ? 'an Echo' : `one of ${row.match.upgradeCandidates} Echoes`} in your inventory, but which one is not certain, so it is added as new. The old ${row.match.upgradeCandidates === 1 ? 'one is' : 'ones are'} listed under "Not in this scan".`}
+            </p>
+          )}
           {row.equipConflict ? (
             <p className="mt-1 text-xs text-amber">
               Another row has the same rolls but a different “Equipped by”, so one of them was misread. Tick the right one.
@@ -453,15 +548,17 @@ function ScanRow({
           )}
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
-          <label className="flex items-center gap-1 text-xs font-bold text-ink">
-            <input
-              type="checkbox"
-              checked={row.included}
-              disabled={draft === null}
-              onChange={(e) => onInclude(e.target.checked)}
-            />
-            Add
-          </label>
+          {row.change !== 'none' && (
+            <label className="flex items-center gap-1 text-xs font-bold text-ink">
+              <input
+                type="checkbox"
+                checked={row.included}
+                disabled={draft === null}
+                onChange={(e) => onInclude(e.target.checked)}
+              />
+              {row.change === 'update' ? 'Update' : 'Add'}
+            </label>
+          )}
           {item.status === 'done' && (
             <button type="button" onClick={onFix} className={`${btnGhost} ${btnSm}`}>
               {fixing ? 'Cancel' : state === 'fix' ? 'Fix' : 'Edit'}

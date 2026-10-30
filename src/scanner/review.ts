@@ -1,6 +1,7 @@
 import type { OwnedEcho } from '../data/schema.ts';
-import { echoFingerprint, markKnown, toDraft, type ScanDraft } from './draft.ts';
+import { echoFingerprint, toDraft, type ScanDraft } from './draft.ts';
 import type { PanelParse, ScanBatch } from './parse.ts';
+import { matchScan, syncChange, type SyncChange, type SyncMatch } from './sync.ts';
 
 /**
  * Scanner layer: review-list derivations for a scan session. Pure — the
@@ -34,8 +35,16 @@ export interface ReviewRow {
   item: ScanItem;
   draft: ScanDraft | null;
   state: RowState;
-  /** The inventory already holds an identical Echo (multiset match). */
+  /** Which owned row this Echo is, if any (`scanner/sync.ts`); null without a draft. */
+  match: SyncMatch | null;
+  /** The owned row it matched (same or upgrade). */
+  owned: OwnedEcho | null;
+  /** What applying the row would do; 'none' = already in the inventory as scanned. */
+  change: SyncChange | null;
+  /** The inventory already holds an identical Echo (`match.kind === 'same'`). */
   known: boolean;
+  /** False while "Equipped by" awaits a pick (Rover): the scan then never changes the app's wearer. */
+  wearerKnown: boolean;
   /**
    * Index of an earlier row in this scan with identical rolls, or null.
    * In a video that is almost always the same Echo clicked twice (A -> B
@@ -66,7 +75,12 @@ function rowState(item: ScanItem, draft: ScanDraft | null): RowState {
 
 export function reviewRows(items: readonly ScanItem[], owned: readonly OwnedEcho[]): ReviewRow[] {
   const drafts = items.map(rowDraft);
-  const known = markKnown(drafts, owned);
+  const wearerKnown = items.map((item) => item.parse?.echo.equippedCandidates === undefined);
+  const matches = matchScan(
+    drafts.map((draft, i) => (draft === null ? null : { draft, wearerKnown: wearerKnown[i] })),
+    owned,
+  );
+  const byId = new Map(owned.map((e) => [e.id, e]));
   const fingerprints = drafts.map((d) => (d === null ? null : echoFingerprint(d)));
   const firstSeen = new Map<string, number>();
   const wearers = new Map<string, Set<string | null>>();
@@ -83,14 +97,22 @@ export function reviewRows(items: readonly ScanItem[], owned: readonly OwnedEcho
     const first = fp === null ? undefined : firstSeen.get(fp);
     const repeatOf = first === undefined || first === i ? null : first;
     const equipConflict = fp !== null && (wearers.get(fp)?.size ?? 0) > 1;
+    const match = matches[i];
+    const ownedRow = match === null || match.kind === 'new' ? null : (byId.get(match.ownedId) ?? null);
+    const change = draft === null || match === null ? null : syncChange(match, draft, wearerKnown[i], ownedRow ?? undefined);
     return {
       item,
       draft,
       state: rowState(item, draft),
-      known: known[i],
+      match,
+      owned: ownedRow,
+      change,
+      known: match?.kind === 'same',
+      wearerKnown: wearerKnown[i],
       repeatOf,
       equipConflict,
-      included: draft !== null && (item.include ?? (!known[i] && repeatOf === null && !equipConflict)),
+      // Nothing to apply for an Echo already in the inventory as scanned.
+      included: change !== null && change !== 'none' && (item.include ?? (repeatOf === null && !equipConflict)),
     };
   });
 }
@@ -105,6 +127,9 @@ export interface ScanSummary {
   known: number;
   repeats: number;
   included: number;
+  /** Ticked rows that add an Echo, and that update one (upgrade or new wearer). */
+  adds: number;
+  updates: number;
 }
 
 export function summarize(rows: readonly ReviewRow[]): ScanSummary {
@@ -119,5 +144,7 @@ export function summarize(rows: readonly ReviewRow[]): ScanSummary {
     known: rows.filter((r) => r.known).length,
     repeats: rows.filter((r) => r.repeatOf !== null).length,
     included: rows.filter((r) => r.included).length,
+    adds: rows.filter((r) => r.included && r.change === 'add').length,
+    updates: rows.filter((r) => r.included && r.change === 'update').length,
   };
 }

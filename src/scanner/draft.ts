@@ -53,27 +53,6 @@ export function echoFingerprint(e: FingerprintInput): string {
   return [e.echoDefId, e.sonataId, e.rarity, e.level, statPart(e.mainStat), subs].join('|');
 }
 
-/**
- * Which scanned Echoes the inventory already holds, as a multiset: with
- * k identical copies owned and m scanned, the first min(k, m) scanned
- * copies are marked known. Returns one flag per scanned entry.
- */
-export function markKnown(scanned: readonly (FingerprintInput | null)[], owned: readonly FingerprintInput[]): boolean[] {
-  const available = new Map<string, number>();
-  for (const e of owned) {
-    const fp = echoFingerprint(e);
-    available.set(fp, (available.get(fp) ?? 0) + 1);
-  }
-  return scanned.map((e) => {
-    if (e === null) return false;
-    const fp = echoFingerprint(e);
-    const left = available.get(fp) ?? 0;
-    if (left === 0) return false;
-    available.set(fp, left - 1);
-    return true;
-  });
-}
-
 /** Helper for UIs: a ScannedEcho is complete enough to fingerprint. */
 export function scannedFingerprintInput(echo: ScannedEcho): FingerprintInput | null {
   if (echo.echoDefId === null || echo.sonataId === null || echo.level === null || echo.mainStat === null || echo.substats.some((s) => s === null)) {

@@ -5,6 +5,7 @@ import { reviewRows, summarize, type ReviewRow } from '../../scanner/review.ts';
 import { planSync } from '../../scanner/sync.ts';
 import { useInventoryStore, type EchoFormDraft, type ScanApplied } from '../../state/inventory.ts';
 import { useScanStore } from '../../state/scanStore.ts';
+import { useScreenWakeLock } from '../wakeLock.ts';
 import { useSnapshotStore } from '../../state/snapshotStore.ts';
 import { formatStatValue, statLabel, toDisplayValue } from '../format.ts';
 import { btnGhost, btnOutline, btnPrimary, btnSm, inputClass, labelClass } from './classes.ts';
@@ -95,6 +96,8 @@ export function EchoScanner({ onClose, onApplied }: { onClose: () => void; onApp
 
   const rows = reviewRows(items, owned);
   const summary = summarize(rows);
+  // A long scan on a phone must not stop because the screen went to sleep.
+  useScreenWakeLock(video !== null || summary.reading > 0);
   const { plan, notSeen, bagged, overfull } = planSync(rows, owned, toDelete);
   const baggedFrom = new Map(bagged.map((b) => [b.id, b.from]));
   const deletes = plan.remove.length;
@@ -171,8 +174,9 @@ export function EchoScanner({ onClose, onApplied }: { onClose: () => void; onApp
             during a recording.
           </li>
           <li>
-            Click through the Echoes while recording the whole game window (or screenshot each one), then drop the
-            recording or the images here. Pause about half a second on each Echo.
+            Tap or click through the Echoes while recording the game screen (a phone&apos;s own screen recorder works), or
+            screenshot each one. Then add the recording or the images here, on this phone or computer. Pause about half
+            a second on each Echo.
           </li>
           <li>Only if your pictures leave out the filter tag (a crop of the right-hand panel), pick the set here.</li>
         </ol>
@@ -254,6 +258,7 @@ export function EchoScanner({ onClose, onApplied }: { onClose: () => void; onApp
             <span className="flex flex-wrap items-center justify-between gap-2">
               <span>
                 {`Scanning ${video.fileName}: ${video.t.toFixed(1)} / ${video.duration > 0 ? video.duration.toFixed(1) : '…'} s · ${video.found} ${video.found === 1 ? 'Echo' : 'Echoes'} found`}
+                <span className="block text-xs text-fog">Keep this page open and in front: the scan pauses while it&apos;s hidden.</span>
               </span>
               <button type="button" onClick={cancelVideo} className={`${btnGhost} ${btnSm}`}>
                 Cancel
@@ -394,7 +399,8 @@ export function EchoScanner({ onClose, onApplied }: { onClose: () => void; onApp
               </details>
             )}
 
-            <div className="mt-4 flex flex-wrap gap-2">
+            {/* Pinned to the bottom of the screen while the list scrolls (above the phone tab bar: App.tsx BottomTabs, min-h-14 + 3px border). */}
+            <div className="sticky bottom-[calc(3.5rem+3px+env(safe-area-inset-bottom))] z-10 -mx-4 mt-4 flex flex-wrap gap-2 border-t-[3px] border-outline bg-panel px-4 py-3 md:bottom-0">
               <button
                 type="button"
                 disabled={plan.add.length + updates + deletes === 0}

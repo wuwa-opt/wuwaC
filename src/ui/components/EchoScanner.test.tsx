@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import fixtures from '../../scanner/fixtures/panels.json';
 import type { ParseFn } from '../../scanner/pipeline.ts';
@@ -134,6 +134,32 @@ describe('EchoScanner', () => {
     expect(within(repeat).getByText('Spectro Drake')).toBeInTheDocument();
     expect(within(repeat).getByRole('checkbox', { name: 'Add' })).not.toBeChecked();
     expect(screen.getByRole('button', { name: 'Add 2 echoes' })).toBeEnabled();
+  });
+
+  it('keeps the screen on while a recording is scanned, and says the scan pauses in the background', async () => {
+    const user = userEvent.setup();
+    const sentinel = { released: false, release: vi.fn(() => ((sentinel.released = true), Promise.resolve())) };
+    const request = vi.fn(() => Promise.resolve(sentinel));
+    Object.defineProperty(navigator, 'wakeLock', { value: { request }, configurable: true });
+    let finish: () => void = () => undefined;
+    setScanDeps({
+      createReader: () => Promise.resolve((_image: Blob, parse: ParseFn) => Promise.resolve({ width: 1894, height: 1062, words: [], parse: parse([]) })),
+      thumbnail: () => Promise.resolve(null),
+      scanVideo: () => new Promise((resolve) => (finish = () => resolve({ duration: 4, segments: 0 }))),
+    });
+    try {
+      render(<EchoScanner onClose={() => undefined} onApplied={() => undefined} />);
+      await user.upload(screen.getByLabelText(/echo screenshots or recording/i), new File(['v'], 'clip.mp4', { type: 'video/mp4' }));
+      expect(await screen.findByText(/the scan pauses while it's hidden/)).toBeInTheDocument();
+      await waitFor(() => expect(request).toHaveBeenCalledWith('screen'));
+      expect(sentinel.released).toBe(false);
+
+      await act(async () => finish());
+      await waitFor(() => expect(sentinel.released).toBe(true));
+      expect(screen.queryByText(/the scan pauses while it's hidden/)).not.toBeInTheDocument();
+    } finally {
+      delete (navigator as { wakeLock?: unknown }).wakeLock;
+    }
   });
 });
 

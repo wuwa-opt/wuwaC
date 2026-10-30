@@ -21,12 +21,16 @@ import { btnDangerGhost, btnGhost, btnOutline, btnPrimary, inputClass } from '..
 import { AnimatedNumber, Skeleton } from '../components/feedback.tsx';
 import { dismissToast, INVENTORY_UNDO_SCOPE, pushToast, UNDO_TOAST_MS } from '../toasts.ts';
 import { usePrefersReducedMotion, useTypewriter } from '../motion.ts';
+import { useIncrementalCount } from '../incremental.ts';
 import { Alert, CostPips, EmptyState, PageHeader, Window } from '../components/ui.tsx';
 import { inventorySummary } from '../echoDisplay.ts';
 import { toDisplayValue } from '../format.ts';
 import { filterByUsage, type UsageFilter } from '../filter.ts';
 import { revokeObjectUrlLater } from '../download.ts';
 import { MAX_KAMERA_BYTES, readTextFile } from '../readFile.ts';
+
+/** Echo rows rendered per batch (see `useIncrementalCount`). */
+const ECHO_LIST_STEP = 30;
 
 function toFormValues(echo: OwnedEcho): EchoFormValues {
   return {
@@ -288,6 +292,11 @@ export function InventoryPage() {
     activeUsageFilter,
   );
   const filterKey = `${sonataFilter}|${costFilter ?? ''}|${activeUsageFilter}`;
+  const { count: listedCount, more: showMoreEchoes, sentinelRef: listEndRef } = useIncrementalCount(
+    visible.length,
+    filterKey,
+    ECHO_LIST_STEP,
+  );
   const fodderShown = activeUsageFilter === 'fodder' ? visible.map((e) => e.id) : [];
   const confirming = fodderConfirm !== null && fodderConfirm.filterKey === filterKey ? fodderConfirm : null;
   const selected = visible.find((e) => e.id === selectedId) ?? null;
@@ -651,8 +660,9 @@ export function InventoryPage() {
               </EmptyState>
             </div>
           ) : (
+            <>
             <EchoTable
-              echoes={visible}
+              echoes={listedCount < visible.length ? visible.slice(0, listedCount) : visible}
               snapshot={snapshot}
               usageTags={usageTags}
               selectedId={selected?.id ?? null}
@@ -666,6 +676,15 @@ export function InventoryPage() {
                 }
               }}
             />
+            {listedCount < visible.length && (
+              <div ref={listEndRef} className="border-t-2 border-dashed border-line px-3 py-3 text-center">
+                <button type="button" onClick={showMoreEchoes} className={btnOutline}>
+                  {`Show ${Math.min(ECHO_LIST_STEP, visible.length - listedCount)} more`}
+                </button>
+                <p className="mt-2 text-xs text-fog" aria-live="polite">{`Showing ${listedCount} of ${visible.length}`}</p>
+              </div>
+            )}
+            </>
           )}
         </Window>
         <div ref={statusRef} className="scroll-mt-4 lg:sticky lg:top-4">

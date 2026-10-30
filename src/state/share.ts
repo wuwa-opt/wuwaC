@@ -214,7 +214,7 @@ export async function decodeShareLink(hash: string): Promise<DecodedShareLink> {
     }
     return { version: 1, build: decodeBuildLink(hash) };
   } catch (err) {
-    if (err instanceof ZodError) throw new Error(`build link failed validation (${describeZodError(err)})`);
+    if (err instanceof ZodError) throw new Error(`build link failed validation (${describeZodError(err)})`, { cause: err });
     throw err;
   }
 }

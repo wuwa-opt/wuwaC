@@ -638,6 +638,41 @@ interface Team {
     while the run lasts, since unmounting stops its timer. The Calculator
     says "Preparing the search…" until `total` is known, and never shows an
     ETA (progress isn't linear).
+- **Phones and touch** (audit and measurements:
+  `.agents/plans/2026-10-30-agents/reports/mobile.md`).
+  - Touch sizing goes through Tailwind's `pointer-coarse:` variant, so
+    mouse layouts keep their density:
+    - 44 px targets: `classes.ts` buttons, inputs and chips, plus the rows
+      and tabs that set their own;
+    - 16 px inputs on any touch screen (iOS zooms below 16 whatever the
+      width);
+    - a 28 px slider box with a 24 px thumb;
+    - `touch-action: manipulation` on controls.
+
+    New controls use the shared classes or add `pointer-coarse:min-h-11`.
+  - `--tabbar-offset` (root variable in `index.css`) is the phone bottom
+    tab bar's height including the home-indicator inset, and 0 from `md`
+    up. Fixed or sticky things at the bottom sit on it: the Inventory
+    Status sheet, toasts and the scanner's Apply bar.
+  - Header, main and tab bar pad by `env(safe-area-inset-*)`
+    (`viewport-fit=cover`).
+  - A section switch scrolls to the top (App, before paint). Tapping the
+    current bottom tab again scrolls up.
+  - **Inventory:**
+    - The Echo list renders in batches of 30 (`ui/incremental.ts`
+      `useIncrementalCount`: a sentinel ~2 screens ahead plus a "Show N
+      more" button; a filter change starts over). 700 Echoes rendered at
+      once froze a 4×-slowed phone for ~5 s per visit; `content-visibility`
+      did not help. Find in page only sees rendered rows; the filters and
+      the fodder bulk delete cover every Echo.
+    - Below `lg`, Status is a bottom sheet (`ui/media.ts` `useMediaQuery`,
+      `NARROW_QUERY`), not a window under the list. Add/Edit scroll their
+      window into view and restore the scroll position on close.
+  - The Screen Wake Lock (`ui/wakeLock.ts`) is held during a scan, a
+    Calculator search and a Team allocation.
+  - The idle page prefetch is skipped under Save-Data / 2G.
+  - Overlays lock page scroll with `.scroll-locked` on `<html>`.
+  - Information must not live only in a `title` (no hover on touch).
 - **Share links.** A `#b=` link opens Builds and is held as
   `useAppStore.shareLink`, captured at load and on `hashchange`; `syncHash`
   won't overwrite it.

@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { OwnedEcho, RosterEntry, SharedBuild } from '../../data/schema.ts';
 import { useCalculatorStore } from '../../state/calculator.ts';
@@ -393,6 +393,43 @@ describe('BuildsPage', () => {
     expect(del).toHaveTextContent(/^Delete$/);
     await user.click(del);
     expect(useLibraryStore.getState().builds).toEqual([]);
+    expect(await db.builds.count()).toBe(0);
+  });
+
+  it('offers an Undo after a delete that brings the same build back, details still open', async () => {
+    const user = userEvent.setup();
+    const saved = await useLibraryStore.getState().saveBuild(seed);
+    useInventoryStore.setState({ echoes: ownEchoes, loaded: true });
+    render(<><BuildsPage /><ToastHost /></>);
+    await screen.findByText('Seeded Build');
+    await user.click(screen.getByRole('button', { name: /show details for seeded build/i }));
+    expect(screen.getByRole('region', { name: /details for seeded build/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Delete Seeded Build' }));
+    expect(await screen.findByText('Build “Seeded Build” deleted.')).toBeInTheDocument();
+    expect(screen.queryByText('Seeded Build')).not.toBeInTheDocument();
+    expect(await db.builds.count()).toBe(0);
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(await screen.findByText('Restored build “Seeded Build”.')).toBeInTheDocument();
+    expect(await db.builds.get(saved.id)).toEqual(saved);
+    expect(useLibraryStore.getState().builds).toEqual([saved]);
+    // Same id: the page's per-build state (open details) applies again.
+    expect(screen.getByRole('region', { name: /details for seeded build/i })).toBeInTheDocument();
+  });
+
+  it('drops the delete Undo when the library reloads (a backup restore)', async () => {
+    const user = userEvent.setup();
+    await useLibraryStore.getState().saveBuild(seed);
+    render(<><BuildsPage /><ToastHost /></>);
+    await screen.findByText('Seeded Build');
+    await user.click(screen.getByRole('button', { name: 'Delete Seeded Build' }));
+    expect(await screen.findByRole('button', { name: 'Undo' })).toBeInTheDocument();
+
+    await act(async () => {
+      await useLibraryStore.getState().load();
+    });
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
     expect(await db.builds.count()).toBe(0);
   });
 

@@ -28,6 +28,9 @@ export const UNDO_TOAST_MS = 10_000;
 /** Scope of Undo offers that are only valid for one loaded inventory (see `ToastHost`). */
 export const INVENTORY_UNDO_SCOPE = 'inventory-undo';
 
+/** Scope of Undo offers that are only valid for one loaded build library (see `ToastHost`). */
+export const LIBRARY_UNDO_SCOPE = 'library-undo';
+
 export type HoldReason = 'hover' | 'focus';
 
 interface Timer {

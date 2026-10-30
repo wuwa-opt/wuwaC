@@ -54,6 +54,17 @@ function lazyPage(section: Section): LazyExoticComponent<ComponentType> {
 const LAZY_PAGES = {} as Record<Section, LazyExoticComponent<ComponentType>>;
 for (const { id } of SECTIONS) LAZY_PAGES[id] = lazyPage(id);
 
+/**
+ * The idle prefetch fetches every page chunk (~400 KB of JS before gzip).
+ * Skip it when the user asked to save data or the link is 2G; pages then
+ * load on first visit. `navigator.connection` is Chromium-only; elsewhere
+ * the prefetch runs.
+ */
+function saveDataRequested(): boolean {
+  const connection = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
+  return connection?.saveData === true || connection?.effectiveType === '2g' || connection?.effectiveType === 'slow-2g';
+}
+
 function prefetchPages(): void {
   for (const { id } of SECTIONS) {
     if (loadedPages[id] === undefined) {
@@ -216,6 +227,7 @@ function App() {
   }, [activeSection]);
 
   useEffect(() => {
+    if (saveDataRequested()) return;
     if (typeof window.requestIdleCallback === 'function') {
       const handle = window.requestIdleCallback(prefetchPages, { timeout: 3000 });
       return () => window.cancelIdleCallback(handle);

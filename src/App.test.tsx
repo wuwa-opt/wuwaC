@@ -107,6 +107,18 @@ describe('route-level code splitting', () => {
     expect(await screen.findByRole('heading', { name: /echo inventory/i }, PAGE_LOAD)).toBeInTheDocument();
   });
 
+  it('does not prefetch under Save-Data', async () => {
+    Object.defineProperty(navigator, 'connection', { value: { saveData: true }, configurable: true });
+    try {
+      const FreshApp = await freshApp();
+      render(<FreshApp />);
+      await screen.findByRole('heading', { name: /echo inventory/i }, PAGE_LOAD);
+      expect(idleCallbacks).toHaveLength(0);
+    } finally {
+      delete (navigator as { connection?: unknown }).connection;
+    }
+  });
+
   it('prefetches the other sections when idle, so navigation renders without a fallback', async () => {
     const user = userEvent.setup();
     const FreshApp = await freshApp();

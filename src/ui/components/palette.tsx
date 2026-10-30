@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { SECTIONS, useAppStore } from '../../state/store.ts';
 import { useThemeStore } from '../../state/theme.ts';
 
@@ -41,6 +41,15 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     setQuery('');
     setHighlight(0);
   }
+
+  // The page behind doesn't scroll while the palette is up (touch drags
+  // went through to it).
+  useEffect(() => {
+    if (!open) return;
+    const root = document.documentElement;
+    root.classList.add('scroll-locked');
+    return () => root.classList.remove('scroll-locked');
+  }, [open]);
 
   if (!open) return null;
   const current = Math.min(highlight, Math.max(0, actions.length - 1));
@@ -99,7 +108,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           }}
           className="w-full border-b border-line bg-panel px-4 py-3 text-sm text-ink outline-none placeholder:text-fog"
         />
-        <ul id="palette-listbox" role="listbox" aria-label="Commands" className="max-h-64 overflow-y-auto p-1.5">
+        <ul id="palette-listbox" role="listbox" aria-label="Commands" className="max-h-64 overflow-y-auto overscroll-contain p-1.5">
           {actions.length === 0 ? (
             <li className="px-3 py-2 text-sm text-fog">No matching command.</li>
           ) : (

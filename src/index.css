@@ -246,6 +246,11 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Set on <html> while a modal overlay is open (command palette). */
+.scroll-locked {
+  overflow: hidden;
+}
+
 ::selection {
   background: var(--color-seal);
   color: var(--color-seal-ink);

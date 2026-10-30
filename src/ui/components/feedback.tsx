@@ -133,7 +133,11 @@ export function ToastStack({
 }) {
   if (toasts.length === 0) return null;
   return (
-    <div aria-live="polite" className="fixed inset-x-4 bottom-20 z-50 flex flex-col gap-2 sm:inset-x-auto sm:right-4 sm:w-72 md:bottom-4">
+    <div
+      aria-live="polite"
+      // Above the phone tab bar (--tabbar-offset, 0 from md up) and clear of a landscape notch.
+      className="fixed right-[max(1rem,env(safe-area-inset-right))] bottom-[calc(var(--tabbar-offset)+1rem)] left-[max(1rem,env(safe-area-inset-left))] z-50 flex flex-col gap-2 sm:left-auto sm:w-72"
+    >
       {toasts.map((toast) => (
         <div
           key={toast.id}

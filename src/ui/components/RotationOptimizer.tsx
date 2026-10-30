@@ -19,6 +19,7 @@ import { MIN_STAT_FIELDS, parseMinStatTexts } from '../minStatFields.ts';
 import { btnOutline, btnPrimary, labelClass, selectClass } from './classes.ts';
 import { Collapsible } from './Collapsible.tsx';
 import { RunClock } from './feedback.tsx';
+import { useScreenWakeLock } from '../wakeLock.ts';
 import { Alert, Window } from './ui.tsx';
 
 type Status =
@@ -108,6 +109,9 @@ export function RotationOptimizer(props: RotationOptimizerProps) {
   const minTexts = useCalculatorStore((s) => s.minStatTexts);
   const setMinTexts = useCalculatorStore((s) => s.setMinStatTexts);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  // A search can run for minutes on a phone; a sleeping screen hides the
+  // page and the browser may throttle or stop its workers.
+  useScreenWakeLock(status.kind === 'running');
   const [result, setResult] = useState<SearchResult | null>(null);
   const [lastRun, setLastRun] = useState<{ data: SearchData; request: OptimizeRequest; enemy: EnemySettings } | null>(null);
   const [savingKey, setSavingKey] = useState<string | null>(null);

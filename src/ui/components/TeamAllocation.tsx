@@ -23,6 +23,7 @@ import { echoDisplayName } from '../echoDisplay.ts';
 import { formatEnemy, formatMinStats, RESONANCE_MODE_LABELS } from '../format.ts';
 import { btnGhost, btnOutline, btnPrimary, labelClass, selectClass } from './classes.ts';
 import { RunClock } from './feedback.tsx';
+import { useScreenWakeLock } from '../wakeLock.ts';
 import { MarkEquipped, type MarkedEquipped } from './MarkEquipped.tsx';
 import { Alert } from './ui.tsx';
 
@@ -128,6 +129,8 @@ export function TeamAllocation({
   const currentKey = useMemo(() => (plan === null ? null : planKey(plan)), [plan]);
   const stale = preview !== null && preview.key !== currentKey;
   const running = status.kind === 'running';
+  // Three searches back to back: keep a phone's screen on meanwhile.
+  useScreenWakeLock(running);
   const ready = inventoryLoaded && buildsLoaded && rosterLoaded;
   const canRun = ready && plan !== null && echoes.length >= 5 && !running;
 

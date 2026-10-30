@@ -3,6 +3,13 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, vi } from 'vitest';
 
+// jsdom has no layout: scrolling is a no-op here (it would otherwise log
+// "Not implemented" for every scrollTo).
+if (typeof window !== 'undefined') {
+  window.scrollTo = () => {};
+  Element.prototype.scrollIntoView ??= function scrollIntoView() {};
+}
+
 // Without `globals: true`, Testing Library cannot auto-register cleanup —
 // do it explicitly so each test gets a fresh document.
 afterEach(() => {

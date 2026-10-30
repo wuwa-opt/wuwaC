@@ -225,6 +225,15 @@
 
 :root {
   color-scheme: light;
+  /* Height of the phone bottom tab bar (App.tsx BottomTabs, min-h-14 + 3px
+   * border + home-indicator inset): fixed sheets, toasts and pinned bars sit
+   * on top of it. 0 from md up, where the top nav replaces it. */
+  --tabbar-offset: calc(3.5rem + 3px + env(safe-area-inset-bottom));
+}
+@media (min-width: 48rem) {
+  :root {
+    --tabbar-offset: 0px;
+  }
 }
 
 body {

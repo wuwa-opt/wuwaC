@@ -356,7 +356,7 @@ export const useInventoryStore = create<InventoryState>()((set, get) => ({
       try {
         return toRow(draft, crypto.randomUUID(), origin);
       } catch (err) {
-        throw new Error(`scan row ${i + 1}: ${err instanceof Error ? err.message : 'invalid'}`);
+        throw new Error(`scan row ${i + 1}: ${err instanceof Error ? err.message : 'invalid'}`, { cause: err });
       }
     });
     for (const { draft } of plan.upgrade) assertDefConsistent(draft);

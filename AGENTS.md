@@ -441,7 +441,8 @@ interface Team {
   (panel-change detector: name line x < 0.55 + stat block, threshold 2.5,
   measured on a real recording; dark Filter-sheet samples, stat block mean
   < 75, are never emitted; each segment offers a second frame `alt`), `pixels.ts` (gold "Equipped by" check:
-  gold in the footer with no line read is an error flag whose row pass 5
+  gold in `equipCheckRect`, a fixed lower part of the panel band never
+  placed from OCR, with no line read is an error flag whose row pass 5
   re-reads, plus the filter-tag box finder), `sonata.ts` (set per row).
   Browser-only: `engine.ts` (tesseract.js
   pool) and `videoFrames.ts` (4× playback via requestVideoFrameCallback,
@@ -453,6 +454,15 @@ interface Team {
     filter is set and the app's pick is NOT applied; only a region capture
     without that area uses the pick. An Echo that rolls one set needs
     neither. Rarity still comes from the batch.
+  - **Frame shapes.** Fractions are of `designWidth` (the frame width up
+    to 16:9, 16/9 × height beyond). On a wider frame (phones at 20:9,
+    ultrawide) the panel band keeps its 16:9 size on the right edge. The
+    tag is searched from x 0 to the band, and the grid bar is read strip by
+    strip (`gridBarRects`). This is unverified on a real recording wider
+    than 16:9: the measurements are synthetic (`scan-fixtures/phone/`).
+    A black pillarbox still hides the tag: with no set picked, its
+    multi-set Echoes are flagged; a picked set applies, as for a region
+    capture.
   - A frame whose pass 1 shows no panel stops after pass 1. A flagged
     video row re-reads its segment's `alt` frame (`openFrameGrabber`, a
     second <video>) and keeps it only if `parseCost` drops. Same-roll rows that disagree on "Equipped by" start

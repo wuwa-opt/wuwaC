@@ -2,6 +2,41 @@
 
 Get the user's in-game Echo inventory (738 Echoes in the 2026-10-16 screenshot) into the app without hand entry. The app reads the game's **Echo Management** detail panel (name, `+level`, Sonata icon, COST, 2 main stats, up to 5 substats, "Equipped by X") from screen pixels, OCRs it in the browser, validates every value against the game's closed vocabularies and discrete roll tables, and stages the result for review before it touches `ownedEchoes`. Multi-session project. Each phase can be verified on its own and leaves the app working.
 
+## Status (2026-10-30, later): phone-style recordings
+
+User direction (2026-10-30): no key (arrows, WASD, Tab) moves the Echo grid selection, so auto-advance would need clicks; set aside. Instead, make the video reader robust, including phone recordings (WuWa runs on mobile).
+
+- **No real phone recording yet.** Every variant below is recording 1 (15 Echoes, hand-read truth) transformed with ffmpeg (`scan-fixtures/phone/`, runs in `scan-fixtures/runs-phone/`). The real mobile layout is unknown; a web search found no mobile screenshot of Echo Management.
+- **Before any change** (browser, `e2e-video.mjs`, no set picked):
+  - fine, 15/15 or 14/15 with the miss flagged, 0 silent: 720p, 720p 30 fps at 800 kbps (a messenger-style copy), 90° rotation metadata, variable frame rate (duplicate frames dropped), H.264 in .mov;
+  - HEVC: "can't play" in this Chromium (Linux, no HEVC decoder);
+  - 20:9 (2400×1080, the game frame on the right edge): 0/15, every row flagged. The panel band was 34% of the frame width, so it took in grid tiles, and the tag area missed the tag.
+- **Changes:**
+  - `designWidth` = the frame width up to 16:9, 16/9 × height beyond. The panel band is 34% of it on the right edge (unchanged at 16:9). The tag box is searched from x 0 to the band (same box on all 84 fixture frames as before). Its size limits use `designWidth` and its letter-gap bridge scales with the height (4K was splitting it).
+  - Grid bar: single-line mode over the whole width read "Sort by" on 0/84 originals, so it is read in strips of the measured width (`gridBarRects`), stopping at the first that shows it. The first strip is the old one.
+  - Gold "Equipped by" check: a fixed region (`equipCheckRect`, the band from 45% down) instead of the OCR-placed footer strip. On a 20:9 720p copy, pass 1 read a 55 px junk word on the last stat row, the footer strip landed under the gold line, and Kelpie came out unequipped with no flag, in 3/3 runs (a silent error). In the fixed region, unequipped panels have 0 gold pixels (27 × 3 sizes), and equipped ones have at least 0.98‰ (57 × 3). Threshold 0.2‰.
+  - The footer strip (pass 4) never starts below half a line above the gold line found in pixels; the gold check now runs before passes 2–4. Placing the fallback by the stat values instead (median value height) fixed the junk case but cut into a last substat whose value pass 1 had missed (720p offline: 2 panels lost, 1 gained), so the old fallback stays, capped.
+  - Tried and dropped: OCR on a 2× upscaled frame for 720p (`scan-spike --pre up`): 1028 vs 1050 of 1092 fields, 43 vs 46 clean panels, 40% slower.
+  - The "can't play" message names HEVC.
+- **Results after the changes** (offline = `scan-spike` + `scan-eval` on the 84 fixture panels; browser = one run each, no set picked):
+  - Offline, fields correct / silent / panels needing no review:
+
+    | Frames | Before | After |
+    |---|---|---|
+    | as recorded | 1088 / 0 / 52 | 1081 / 0 / 55 |
+    | 720p | 1062 / 0 / 51 | 1054 / 0 / 49 |
+    | 20:9 (2400×1080) | not readable | 1085 / 0 / 53 |
+
+    The field losses are one panel per set whose whole stat block pass 1 missed (flagged) after the band moved 2–3 px. On the user's recordings, which are 0.3–0.4% wider than 16:9, the band is now 16/9 × height.
+  - Browser:
+    - recording 1: 15/15, all Ready;
+    - 20:9: 14/15 (the miss is flagged);
+    - 20:9 at 720p: 15/15, 0 silent (it was 1 silent in 3/3 runs);
+    - 720p and the messenger copy: 15/15;
+    - recording 2: 46/46 truth rows, 0 silent, 46.6 s.
+  - Still unreadable: a black pillarbox (the frame padded with near-black). The tag finder takes the bar for the tag. With no set picked, every multi-set Echo is flagged (0/15, 0 silent). A set picked in the app would be applied, as for a region capture.
+- **Next:** a real phone recording (any phone, Echo Management, a Sonata filter set, ~20 Echoes) to check the 20:9 assumption, then black-bar cropping if real recordings have bars.
+
 ## Status (2026-10-30): Phase 5, rescan sync
 
 - **Matching** (`src/scanner/sync.ts`, pure): identical rolls pair first with the copy recorded on the same character, then with any copy. An upgrade means the same def/set/rarity/main stat at a lower level, with every owned substat among the scanned ones. It pairs only when there is one candidate group of identical owned rows with a copy for each distinct scanned Echo that claims it. Otherwise the row is new and says it may be an upgrade. A repeat (the same Echo clicked twice) claims once.

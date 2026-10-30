@@ -11,11 +11,12 @@
  * ImageMagick). The dump also keeps pass 1's words (`pass1`), so the
  * early stop for panel-less frames can be checked against real panels.
  *
- * `--pre red|gray` OCRs a 2× ImageMagick-preprocessed copy instead (red
- * channel or luminance, inverted to dark-on-light) — the app does the
- * same on a canvas; this measures whether it is worth it.
+ * `--pre red|gray|up` OCRs a 2× ImageMagick-preprocessed copy instead (red
+ * channel or luminance, inverted to dark-on-light; or `up`, only scaled)
+ * — the app would do the same on a canvas; this measures whether it is
+ * worth it.
  *
- * Run: npx tsx scripts/scan-spike.ts [--variant name] [--pre red|gray] [file ...]
+ * Run: npx tsx scripts/scan-spike.ts [--variant name] [--pre red|gray|up] [file ...]
  */
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -75,8 +76,9 @@ async function main(): Promise<void> {
     if (pre !== undefined) {
       mkdirSync(join(FIXTURES, '.pre'), { recursive: true });
       image = join(FIXTURES, '.pre', `${basename(file, '.png')}.${pre}.png`);
-      const channel = pre === 'red' ? ['-channel', 'R', '-separate', '+channel'] : ['-colorspace', 'gray'];
-      execFileSync('magick', [file, ...channel, '-negate', '-resize', `${SCALE * 100}%`, image]);
+      // up = the frame scaled 2x (bilinear, like a canvas) with no other change.
+      const channel = pre === 'red' ? ['-channel', 'R', '-separate', '+channel', '-negate'] : pre === 'gray' ? ['-colorspace', 'gray', '-negate'] : ['-filter', 'Triangle'];
+      execFileSync('magick', [file, ...channel, '-resize', `${SCALE * 100}%`, image]);
       scale = SCALE;
     }
     let pass1: OcrWord[] | null = null;

@@ -33,10 +33,26 @@ export interface Rect {
   height: number;
 }
 
+/**
+ * Width of the 16:9 layout a frame's UI is measured on: the frame's own
+ * width up to 16:9, and 16/9 of its height beyond (phones at 20:9,
+ * ultrawide monitors), where the UI is assumed to keep its 16:9 size and
+ * the detail panel stays on the right edge. Every 16:9 fraction below is
+ * a fraction of this width.
+ *
+ * Unverified for wider frames: no real recording wider than 16:9 has been
+ * measured yet. A 2026-10-30 synthetic one (recording 1 with 474 px
+ * added on the left, 2400×1080) read 0/15 Echoes with the band at 34% of
+ * the frame.
+ */
+export function designWidth(frameWidth: number, frameHeight: number): number {
+  return Math.min(frameWidth, Math.round((frameHeight * 16) / 9));
+}
+
 export function panelRect(frameWidth: number, frameHeight: number): Rect {
-  const left = Math.round(frameWidth * 0.66);
+  const width = Math.round(designWidth(frameWidth, frameHeight) * 0.34);
   const top = Math.round(frameHeight * 0.08);
-  return { left, top, width: frameWidth - left, height: Math.round(frameHeight * 0.8) };
+  return { left: frameWidth - width, top, width, height: Math.round(frameHeight * 0.8) };
 }
 
 /**
@@ -47,25 +63,43 @@ export function panelRect(frameWidth: number, frameHeight: number): Rect {
  * the user's two recordings (62 frames with a tag): the tag's dark box is
  * 410×50 px at x 0.086–0.096 to 0.302–0.309, y 0.826–0.872 of the frame
  * (it is anchored to the grid, so x shifts with how the window is framed);
- * "Sort by Level" sits at y ≈ 0.905. The rectangle keeps a margin of at
- * least 0.026 of the frame on every side.
+ * "Sort by Level" sits at y ≈ 0.905.
+ *
+ * It spans x from the frame's left edge to the panel band, so the tag is
+ * inside wherever a wider screen puts the grid. On all 84 fixture frames
+ * (2026-10-30) `findTagBox` over that span returned the same box as over
+ * the earlier x 0.04–0.36.
  */
 export function filterTagRect(frameWidth: number, frameHeight: number): Rect {
-  const left = Math.round(frameWidth * 0.04);
   const top = Math.round(frameHeight * 0.8);
-  return { left, top, width: Math.round(frameWidth * 0.36) - left, height: Math.round(frameHeight * 0.95) - top };
+  return { left: 0, top, width: panelRect(frameWidth, frameHeight).left, height: Math.round(frameHeight * 0.95) - top };
 }
 
 /**
- * The grid's bottom bar inside `filterTagRect` ("Sort by Level"), read
- * when no tag is seen: present = the grid is in the picture with no
- * filter set. Measured 2026-10-23: "Sort by" read on 84/84 frames (both
- * recordings and the screenshots) in single-line mode.
+ * Strips to read for the grid's bottom bar ("Sort by Level") inside
+ * `filterTagRect`, in order, when no tag is seen: present = the grid is in
+ * the picture with no filter set. Measured 2026-10-23: "Sort by" read on
+ * 84/84 frames (both recordings and the screenshots) in single-line mode
+ * over x 0.04–0.36 of the frame, the first strip here. Single-line mode
+ * over the whole tag area read it on 0 of those 84 (2026-10-30), so a
+ * wider screen gets more strips of the same width, half a strip apart,
+ * the last ending at the panel band; the caller stops at the first that
+ * shows the bar.
  */
-export function gridBarRect(frameWidth: number, frameHeight: number): Rect {
+export function gridBarRects(frameWidth: number, frameHeight: number): Rect[] {
   const area = filterTagRect(frameWidth, frameHeight);
+  const unit = designWidth(frameWidth, frameHeight);
+  const first = Math.round(unit * 0.04);
+  const width = Math.round(unit * 0.36) - first;
   const top = Math.round(frameHeight * 0.88);
-  return { left: area.left, top, width: area.width, height: area.top + area.height - top };
+  const height = area.top + area.height - top;
+  const right = area.left + area.width;
+  const rects: Rect[] = [];
+  for (let left = first; ; left += Math.round(width / 2)) {
+    const clamped = Math.max(area.left, Math.min(left, right - width));
+    rects.push({ left: clamped, top, width: Math.min(width, right - clamped), height });
+    if (clamped + width >= right) return rects;
+  }
 }
 
 function bottom(r: Rect): number {
@@ -112,8 +146,14 @@ export function valueColumnRect(pass1: readonly OcrWord[], panel: Rect, bottomLi
  * the last stat row, so a wrapped label's second line ("DMG Bonus") stays
  * out of the strip — a strip that slices a text line through the middle
  * turns it into junk.
+ *
+ * `equipLine` is the gold "Equipped by" line found in pixels, if any: the
+ * strip never starts below half a line above it. At 720p, pass 1 can read
+ * a junk word 2–3 lines tall on the last stat row, and the strip then
+ * started under the gold line (2026-10-30). Measuring the fallback on the
+ * values instead lost a last substat whose value pass 1 had missed.
  */
-export function footerRect(pass1: readonly OcrWord[], panel: Rect): Rect {
+export function footerRect(pass1: readonly OcrWord[], panel: Rect, equipLine: OcrBox | null = null): Rect {
   const rows = groupRows(pass1);
   const stats = statRows(rows, panel);
   const last = stats.at(-1);
@@ -126,8 +166,21 @@ export function footerRect(pass1: readonly OcrWord[], panel: Rect): Rect {
   } else {
     top = panel.top + panel.height * 0.75;
   }
+  if (equipLine !== null) top = Math.min(top, equipLine.y0 - (equipLine.y1 - equipLine.y0) / 2);
   const clampedTop = Math.min(Math.round(top), bottom(panel) - 1);
   return { left: panel.left, top: clampedTop, width: panel.width, height: bottom(panel) - clampedTop };
+}
+
+/**
+ * Where the pixel check looks for the gold "Equipped by" line
+ * (pixels.ts): the band from 45% of its height down, below the Echo art
+ * and the header, fixed so no OCR misread can move it. Measured
+ * 2026-10-30 on the 84 fixture panels at three sizes: the gold starts at
+ * 0.908–0.918 of the band, and unequipped panels have none in here.
+ */
+export function equipCheckRect(panel: Rect): Rect {
+  const top = panel.top + Math.round(panel.height * 0.45);
+  return { left: panel.left, top, width: panel.width, height: bottom(panel) - top };
 }
 
 /** Stat labels: left of the value column, from the value column's top down to the footer. */

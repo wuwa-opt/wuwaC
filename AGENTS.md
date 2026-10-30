@@ -404,7 +404,8 @@ interface Team {
   validation), `layout.ts` + `pipeline.ts` (passes 1–4, then pass 5
   re-reads only flagged rows in single-line mode and keeps a strip only
   if `parseCost` drops — unread fields outrank flag counts), `draft.ts`,
-  `review.ts` (owned Echoes and in-scan repeats start unticked), `video.ts`
+  `review.ts` (in-scan repeats start unticked), `sync.ts` (rescan: which
+  owned row each scanned Echo is, and the writes), `video.ts`
   (panel-change detector: name line x < 0.55 + stat block, threshold 2.5,
   measured on a real recording; dark Filter-sheet samples, stat block mean
   < 75, are never emitted; each segment offers a second frame `alt`), `pixels.ts` (gold "Equipped by" check:
@@ -424,6 +425,23 @@ interface Team {
     video row re-reads its segment's `alt` frame (`openFrameGrabber`, a
     second <video>) and keeps it only if `parseCost` drops. Same-roll rows that disagree on "Equipped by" start
     unticked. "Phantom: X" is X (cosmetic, user-confirmed).
+  - **Rescan** (`sync.ts`, applied by `inventory.applyScan` in one
+    transaction, Undo via `undoScan` on the Inventory page). A scanned
+    Echo pairs with an owned row by identical rolls (the copy on the same
+    character first) or as an upgrade. An upgrade means the same
+    def/set/rarity/main stat at a lower level, with its substats among the
+    scanned ones. It is paired only when certain, otherwise it is added as
+    new with a note; it is never guessed.
+    - An upgrade is updated in place: same id, so builds resolve, with the
+      origin, nickname, lock and unchanged substats' `rolls` kept.
+    - The scan wins on "Equipped by" (user decision), except while a Rover
+      pick is pending.
+    - A character the scan shows wearing exactly 5 gets its other recorded
+      Echoes sent back to the bag. More than 5 is a warning and changes
+      nothing for them.
+    - Owned Echoes of the scanned sets/rarities that no row matched are
+      listed as "Not in this scan"; deleting one is opt-in, and locked
+      Echoes are never deleted.
   OCR runtime is self-hosted under `ocr/<tesseract version>/` by the
   `ocrAssets` plugin in `vite.config.ts` (never precached, never a CDN;
   tesseract's own IndexedDB cache stays off — unprefixed store name).

@@ -4,9 +4,10 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import fixtures from '../../scanner/fixtures/panels.json';
 import type { ParseFn } from '../../scanner/pipeline.ts';
+import { reviewRows } from '../../scanner/review.ts';
 import type { VideoScanOptions } from '../../scanner/videoFrames.ts';
 import { db } from '../../state/db.ts';
-import { useInventoryStore } from '../../state/inventory.ts';
+import { useInventoryStore, type ScanApplied } from '../../state/inventory.ts';
 import { setScanDeps, useScanStore } from '../../state/scanStore.ts';
 import { EchoScanner } from './EchoScanner.tsx';
 
@@ -39,7 +40,7 @@ const png = (name: string): File => new File(['x'], `${name}.png`, { type: 'imag
 
 describe('EchoScanner', () => {
   it('takes screenshots with no set picked: the set is read from the in-game filter by default', () => {
-    render(<EchoScanner onClose={() => undefined} onImported={() => undefined} />);
+    render(<EchoScanner onClose={() => undefined} onApplied={() => undefined} />);
     expect(screen.getByRole('button', { name: /add screenshots/i })).toBeEnabled();
     expect(screen.getByLabelText(/sonata set/i)).toHaveDisplayValue('Read from the in-game filter');
   });
@@ -47,7 +48,7 @@ describe('EchoScanner', () => {
   it('scans, shows review states and the filter count, and imports the included echoes', async () => {
     const user = userEvent.setup();
     let imported = 0;
-    render(<EchoScanner onClose={() => undefined} onImported={(n) => (imported = n)} />);
+    render(<EchoScanner onClose={() => undefined} onApplied={(a) => (imported = a.added.length)} />);
 
     await user.selectOptions(screen.getByLabelText(/sonata set/i), 'flamewing-s-shadow');
     await user.type(screen.getByLabelText(/count in filter/i), '2');
@@ -72,7 +73,7 @@ describe('EchoScanner', () => {
 
   it('blocks an Echo that cannot roll the batch set and explains why', async () => {
     const user = userEvent.setup();
-    render(<EchoScanner onClose={() => undefined} onImported={() => undefined} />);
+    render(<EchoScanner onClose={() => undefined} onApplied={() => undefined} />);
     await user.selectOptions(screen.getByLabelText(/sonata set/i), 'freezing-frost');
     await user.upload(screen.getByLabelText(/echo screenshots/i), [png('2026-10-16_16-56-49')]);
 
@@ -85,7 +86,7 @@ describe('EchoScanner', () => {
 
   it('asks which Rover, and imports with the choice', async () => {
     const user = userEvent.setup();
-    render(<EchoScanner onClose={() => undefined} onImported={() => undefined} />);
+    render(<EchoScanner onClose={() => undefined} onApplied={() => undefined} />);
     await user.selectOptions(screen.getByLabelText(/sonata set/i), 'rejuvenating-glow');
     await user.upload(screen.getByLabelText(/echo screenshots/i), [png('2026-10-16_17-19-07')]);
 
@@ -123,7 +124,7 @@ describe('EchoScanner', () => {
       },
     };
     setScanDeps(deps);
-    render(<EchoScanner onClose={() => undefined} onImported={() => undefined} />);
+    render(<EchoScanner onClose={() => undefined} onApplied={() => undefined} />);
     await user.selectOptions(screen.getByLabelText(/sonata set/i), 'windward-pilgrimage');
     await user.upload(screen.getByLabelText(/echo screenshots or recording/i), new File(['v'], 'clip.mp4', { type: 'video/mp4' }));
 
@@ -133,5 +134,73 @@ describe('EchoScanner', () => {
     expect(within(repeat).getByText('Spectro Drake')).toBeInTheDocument();
     expect(within(repeat).getByRole('checkbox', { name: 'Add' })).not.toBeChecked();
     expect(screen.getByRole('button', { name: 'Add 2 echoes' })).toBeEnabled();
+  });
+});
+
+describe('EchoScanner: rescan', () => {
+  it('updates known Echoes in place (the scan wins on "Equipped by"), lists unseen ones, and deletes only what is ticked', async () => {
+    const user = userEvent.setup();
+    // What the two screenshots read as, to build an inventory that predates them.
+    useScanStore.getState().setBatch({ sonataId: 'flamewing-s-shadow' });
+    await useScanStore.getState().addImages([png('2026-10-16_16-56-49'), png('2026-10-16_17-18-02')]);
+    const [leviathan, kerasaur] = reviewRows(useScanStore.getState().items, []).map((r) => r.draft!);
+    useScanStore.getState().clear();
+    expect([leviathan.equippedTo, kerasaur.equippedTo]).toEqual(['galbrena', 'denia']);
+
+    const store = useInventoryStore.getState();
+    // The Leviathan, recorded on someone else; the Kerasaur before its last two tunes; one more Echo of the set.
+    const lev = await store.addEcho({ ...leviathan, equippedTo: 'carlotta' });
+    const ker = await store.addEcho({
+      ...kerasaur,
+      level: 15,
+      mainStat: { ...kerasaur.mainStat, value: 0.2 },
+      substats: kerasaur.substats.slice(0, 3),
+      label: 'my kerasaur',
+    });
+    const unseen = await store.addEcho({ ...kerasaur, level: 0, mainStat: { stat: 'hpPct', value: 0.066 }, substats: [], equippedTo: null });
+
+    let applied: ScanApplied | null = null;
+    render(<EchoScanner onClose={() => undefined} onApplied={(a) => (applied = a)} />);
+    await user.upload(screen.getByLabelText(/echo screenshots/i), [png('2026-10-16_16-56-49'), png('2026-10-16_17-18-02')]);
+
+    const levRow = (await screen.findByText('Reminiscence: Threnodian - Leviathan')).closest('li')!;
+    expect(within(levRow).getByText('already in inventory')).toBeInTheDocument();
+    expect(within(levRow).getByText(/Your inventory has it on Carlotta; this scan updates that/)).toBeInTheDocument();
+    expect(within(levRow).getByRole('checkbox', { name: 'Update' })).toBeChecked();
+    // (The unseen Kerasaur is listed further down, under "Not in this scan".)
+    const kerRow = (await screen.findByText('levelled up from your +15 copy')).closest('li')!;
+    expect(within(kerRow).getByText('Kerasaur')).toBeInTheDocument();
+    expect(within(kerRow).getByRole('checkbox', { name: 'Update' })).toBeChecked();
+
+    expect(screen.getByText(/Not in this scan: 1 Echo in your inventory/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply: update 2' })).toBeEnabled();
+    await user.click(screen.getByRole('checkbox', { name: 'Delete' }));
+    await user.click(screen.getByRole('button', { name: 'Apply: update 2 · delete 1' }));
+
+    await waitFor(() => expect(applied).not.toBeNull());
+    expect((await db.ownedEchoes.get(lev.id))?.equippedTo).toBe('galbrena');
+    // Same row (builds still point at it), new level and substats, nickname kept.
+    expect(await db.ownedEchoes.get(ker.id)).toMatchObject({ level: 25, substats: kerasaur.substats, equippedTo: 'denia', label: 'my kerasaur' });
+    expect(await db.ownedEchoes.get(unseen.id)).toBeUndefined();
+    expect(await db.ownedEchoes.count()).toBe(2);
+    expect(useScanStore.getState().items).toEqual([]);
+  });
+
+  it('never moves an Echo off its recorded wearer while "Equipped by" waits for a pick (Rover)', async () => {
+    const user = userEvent.setup();
+    useScanStore.getState().setBatch({ sonataId: 'rejuvenating-glow' });
+    await useScanStore.getState().addImages([png('2026-10-16_17-19-07')]);
+    const whiff = reviewRows(useScanStore.getState().items, [])[0].draft!;
+    useScanStore.getState().clear();
+    await useInventoryStore.getState().addEcho({ ...whiff, equippedTo: 'rover-havoc' });
+
+    render(<EchoScanner onClose={() => undefined} onApplied={() => undefined} />);
+    await user.upload(screen.getByLabelText(/echo screenshots/i), [png('2026-10-16_17-19-07')]);
+    const row = (await screen.findByText('Whiff Whaff')).closest('li')!;
+    expect(within(row).getByText('already in inventory')).toBeInTheDocument();
+    expect(within(row).queryByRole('checkbox')).toBeNull();
+    // Picking a different Rover is a reading: now it updates.
+    await user.selectOptions(within(row).getByRole('combobox'), 'rover-spectro');
+    expect(within(row).getByRole('checkbox', { name: 'Update' })).toBeChecked();
   });
 });

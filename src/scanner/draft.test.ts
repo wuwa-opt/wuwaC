@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { echoFingerprint, markKnown, scannedFingerprintInput, toDraft } from './draft.ts';
+import { echoFingerprint, scannedFingerprintInput, toDraft } from './draft.ts';
 import type { PanelParse, ScannedEcho } from './parse.ts';
 
 const ECHO: ScannedEcho = {
@@ -57,14 +57,5 @@ describe('echoFingerprint', () => {
     expect(echoFingerprint(scannedFingerprintInput(ECHO)!)).toBe(
       'kerasaur|flaming-clawprint|5|25|dmgBonus:Fusion=0.3000|critRate=0.0630,energyRegen=0.0840',
     );
-  });
-});
-
-describe('markKnown', () => {
-  it('matches as a multiset: 1 owned copy covers only the first of 2 scanned', () => {
-    const a = scannedFingerprintInput(ECHO)!;
-    const other = { ...a, level: 0, substats: [] };
-    expect(markKnown([a, other, a, null], [a])).toEqual([true, false, false, false]);
-    expect(markKnown([a, a], [a, a])).toEqual([true, true]);
   });
 });

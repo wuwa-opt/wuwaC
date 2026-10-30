@@ -8,7 +8,7 @@ import {
 } from '../../data/kamera.ts';
 import type { OwnedEcho } from '../../data/schema.ts';
 import { findUnusedEchoes } from '../../optimizer/unused.ts';
-import { echoDefIssues, useInventoryStore } from '../../state/inventory.ts';
+import { echoDefIssues, useInventoryStore, type ScanApplied } from '../../state/inventory.ts';
 import { useLibraryStore } from '../../state/library.ts';
 import { seedInventory } from '../../state/seed.ts';
 import { useSnapshotStore } from '../../state/snapshotStore.ts';
@@ -92,6 +92,7 @@ export function InventoryPage() {
   const removeEchoes = useInventoryStore((s) => s.removeEchoes);
   const setLocked = useInventoryStore((s) => s.setLocked);
   const restoreEchoes = useInventoryStore((s) => s.restoreEchoes);
+  const undoScan = useInventoryStore((s) => s.undoScan);
   const importEchoes = useInventoryStore((s) => s.importEchoes);
   const [adding, setAdding] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -210,6 +211,38 @@ export function InventoryPage() {
                   : `Restored ${noun(restored.length)}; ${noun(skipped.length)} already back, left as is.`,
               );
             })
+            .catch((err: unknown) => pushToast(err instanceof Error ? err.message : 'Undo failed.', 'danger'));
+        },
+      },
+    });
+  };
+
+  /** Toast for an applied scan, with an Undo that reverts it row by row (in memory only). */
+  const pushScanUndoToast = (applied: ScanApplied): void => {
+    const noun = (n: number): string => `${n} ${n === 1 ? 'echo' : 'echoes'}`;
+    const parts = [
+      applied.added.length > 0 ? `added ${noun(applied.added.length)}` : null,
+      applied.after.length > 0 ? `updated ${noun(applied.after.length)}` : null,
+      applied.removed.length > 0 ? `deleted ${noun(applied.removed.length)}` : null,
+    ].filter((x) => x !== null);
+    const message = `Scan: ${parts.length > 0 ? parts.join(', ') : 'nothing changed'}.`;
+    const issuedAt = useInventoryStore.getState().generation;
+    const id = pushToast(message, 'success', {
+      timeoutMs: UNDO_TOAST_MS,
+      scope: INVENTORY_UNDO_SCOPE,
+      action: {
+        label: 'Undo',
+        onAction: () => {
+          dismissToast(id);
+          if (useInventoryStore.getState().generation !== issuedAt) return;
+          undoScan(applied)
+            .then(({ restored, skipped }) =>
+              pushToast(
+                skipped === 0
+                  ? `Undid the scan (${restored} ${restored === 1 ? 'change' : 'changes'}).`
+                  : `Undid ${restored} of the scan's changes; ${skipped} changed again since, left as is.`,
+              ),
+            )
             .catch((err: unknown) => pushToast(err instanceof Error ? err.message : 'Undo failed.', 'danger'));
         },
       },
@@ -367,7 +400,7 @@ export function InventoryPage() {
       {scanning && (
         <EchoScanner
           onClose={() => setScanning(false)}
-          onImported={(count) => pushToast(`Added ${count} scanned ${count === 1 ? 'echo' : 'echoes'}.`)}
+          onApplied={pushScanUndoToast}
         />
       )}
 

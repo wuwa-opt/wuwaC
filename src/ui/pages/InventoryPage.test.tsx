@@ -6,6 +6,9 @@ import type { Build, OwnedEcho } from '../../data/schema.ts';
 import { db } from '../../state/db.ts';
 import { useInventoryStore } from '../../state/inventory.ts';
 import { useLibraryStore } from '../../state/library.ts';
+import fixtures from '../../scanner/fixtures/panels.json';
+import type { ParseFn } from '../../scanner/pipeline.ts';
+import { setScanDeps, useScanStore } from '../../state/scanStore.ts';
 import { MAX_KAMERA_BYTES } from '../readFile.ts';
 import { fakeSizedFile } from '../testFile.ts';
 import { InventoryPage } from './InventoryPage.tsx';
@@ -689,5 +692,46 @@ describe('InventoryPage', () => {
       expect(screen.getByText('0 safe fodder')).toBeInTheDocument();
       expect(screen.getByText(/needs a saved build with an objective/)).toBeInTheDocument();
     });
+  });
+});
+
+describe('InventoryPage: scanning', () => {
+  type RawPanel = { frame: number[]; words: (string | number)[][] };
+  const panels = fixtures.panels as Record<string, RawPanel>;
+
+  it('applies a scan and offers an Undo that reverts it', async () => {
+    // Replays the real OCR words recorded for the fixture named like the file.
+    setScanDeps({
+      createReader: () =>
+        Promise.resolve((image: Blob, parse: ParseFn) => {
+          const panel = panels[(image as File).name.replace(/\.png$/, '')];
+          const words = panel.words.map(([text, x0, y0, x1, y1]) => ({
+            text: String(text),
+            bbox: { x0: Number(x0), y0: Number(y0), x1: Number(x1), y1: Number(y1) },
+          }));
+          return Promise.resolve({ width: panel.frame[0], height: panel.frame[1], words, parse: parse(words) });
+        }),
+      thumbnail: () => Promise.resolve(null),
+    });
+    useScanStore.getState().clear();
+    // The screenshot is a crop without the in-game filter tag: the set comes from the pick.
+    useScanStore.getState().setBatch({ sonataId: 'flamewing-s-shadow' });
+    try {
+      const user = userEvent.setup();
+      render(<><InventoryPage /><ToastHost /></>);
+      await screen.findByText(/no echoes yet/i);
+      await user.click(screen.getByRole('button', { name: 'Scan from game' }));
+      await user.upload(screen.getByLabelText(/echo screenshots/i), [new File(['x'], '2026-10-16_16-56-49.png', { type: 'image/png' })]);
+      await user.click(await screen.findByRole('button', { name: 'Add 1 echo' }));
+
+      expect(await screen.findByText('Scan: added 1 echo.')).toBeInTheDocument();
+      expect(await db.ownedEchoes.count()).toBe(1);
+      await user.click(screen.getByRole('button', { name: 'Undo' }));
+      expect(await screen.findByText('Undid the scan (1 change).')).toBeInTheDocument();
+      expect(await db.ownedEchoes.count()).toBe(0);
+    } finally {
+      setScanDeps(null);
+      useScanStore.getState().setBatch({ sonataId: '' });
+    }
   });
 });

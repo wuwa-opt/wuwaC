@@ -2,6 +2,19 @@
 
 Get the user's in-game Echo inventory (738 Echoes in the 2026-10-16 screenshot) into the app without hand entry. The app reads the game's **Echo Management** detail panel (name, `+level`, Sonata icon, COST, 2 main stats, up to 5 substats, "Equipped by X") from screen pixels, OCRs it in the browser, validates every value against the game's closed vocabularies and discrete roll tables, and stages the result for review before it touches `ownedEchoes`. Multi-session project. Each phase can be verified on its own and leaves the app working.
 
+## Status (2026-10-30): Phase 5, rescan sync
+
+- **Matching** (`src/scanner/sync.ts`, pure): identical rolls pair first with the copy recorded on the same character, then with any copy. An upgrade means the same def/set/rarity/main stat at a lower level, with every owned substat among the scanned ones. It pairs only when there is one candidate group of identical owned rows with a copy for each distinct scanned Echo that claims it. Otherwise the row is new and says it may be an upgrade. A repeat (the same Echo clicked twice) claims once.
+- **Applying** (`inventory.applyScan`, one Dexie transaction): add the new Echoes and update upgrades in place (same id; origin, nickname, lock and unchanged `rolls` kept). Set "Equipped by" from the scan (it wins; an unpicked Rover never overwrites). Delete the opt-in "Not in this scan" rows (never locked ones). If a row to update has gone since the review, nothing is written. `undoScan` reverts row by row, only rows still exactly as the scan left them; the Inventory page shows the Undo toast.
+- **Back to the bag:** a character the scan shows wearing exactly 5 gets any other recorded Echo unequipped. Recording 1 shows Cartethyia with exactly 5. More than 5 is a warning and unequips nothing.
+- **Browser** (`scan-fixtures/e2e-rescan.mjs`, recording 1, against `npm run preview`):
+  - first scan: 15 added;
+  - after making the stored data older (one Echo moved to Jiyan, one taken back to +20 with 4 substats, a stale Echo of the set on Cartethyia), the rescan showed 14 rows already in the inventory and "Apply: update 3";
+  - after Apply: the Echo was back on its wearer, the +20 copy was +25 under the same id, and the stale one was unequipped;
+  - Undo reverted all three. 0 CSP, 0 exceptions.
+- **Tests:** `sync.test.ts` (14), `inventory.test.ts` apply/undo (5), and EchoScanner and Inventory page rescan + Undo flows. This meets the Phase 5 gate ("levelling one Echo shows exactly 1 Upgraded row, and builds still resolve": same id).
+- **Not done** (from the Phase 5 list): "Create current-gear builds" from groups of 5 equipped Echoes.
+
 ## Status (2026-10-23, later): fewer reviews, 3× faster on filter switches
 
 - **Filter sheet never emitted:** the walk skips samples whose stat block is dark (mean luminance < 75; panels measured 94.6–117.1, blends ≤ 63.2, sheet ≤ 41.4). No PNG encode or OCR runs for them. Recording 2 went from ~145 s to 45–48 s, and the blend rows ("stats not validated", "level not read") are gone.

@@ -233,6 +233,47 @@ describe('InventoryPage', () => {
     expect(screen.getByText('Thunder One')).toBeInTheDocument();
   });
 
+  it('renders a long inventory in batches of 30, and a new filter starts over', async () => {
+    const base: OwnedEcho = {
+      id: 'x',
+      echoDefId: 'hooscamp',
+      sonataId: 'lingering-tunes',
+      cost: 1,
+      level: 25,
+      rarity: 5,
+      mainStat: { stat: 'atkPct', value: 0.3 },
+      substats: [],
+      equippedTo: null,
+      origin: 'manual',
+    };
+    await db.ownedEchoes.bulkAdd(
+      Array.from({ length: 70 }, (_, i) => ({
+        ...base,
+        id: `echo-${String(i).padStart(3, '0')}`,
+        label: `Echo ${i}`,
+        ...(i % 2 === 1 ? { echoDefId: 'tempest-mephis', sonataId: 'void-thunder', cost: 4 as const } : {}),
+      })),
+    );
+    const user = userEvent.setup();
+    render(<><InventoryPage /><ToastHost /></>);
+    const table = await screen.findByRole('table');
+    // Body rows only (the header row is a row too).
+    const rows = (): number => within(table).getAllByRole('row').length - 1;
+
+    expect(rows()).toBe(30);
+    expect(screen.getByText('Showing 30 of 70')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Show 30 more' }));
+    expect(rows()).toBe(60);
+    await user.click(screen.getByRole('button', { name: 'Show 10 more' }));
+    expect(rows()).toBe(70);
+    expect(screen.queryByRole('button', { name: /^show \d+ more$/i })).not.toBeInTheDocument();
+
+    // 35 Void Thunder Echoes: back to the first batch.
+    await user.selectOptions(screen.getByLabelText(/sonata set/i), 'void-thunder');
+    expect(within(screen.getByRole('table')).getAllByRole('row')).toHaveLength(31);
+    expect(screen.getByText('Showing 30 of 35')).toBeInTheDocument();
+  });
+
   it('shows an empty-filter state when no echo matches the sonata set', async () => {
     await db.ownedEchoes.add({
       id: 'echo-lingering',

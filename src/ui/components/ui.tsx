@@ -66,6 +66,7 @@ export function Window({
   title,
   bar = 'a',
   actions,
+  actionsClassName = '',
   className = '',
   bodyClassName = 'p-4',
   children,
@@ -74,6 +75,8 @@ export function Window({
   title?: ReactNode;
   bar?: 'a' | 'b';
   actions?: ReactNode;
+  /** Extra classes on the actions box (e.g. full width when it wraps on phones). */
+  actionsClassName?: string;
   className?: string;
   bodyClassName?: string;
   children: ReactNode;
@@ -92,7 +95,7 @@ export function Window({
           className={`flex flex-wrap items-center justify-between gap-2 border-b-[3px] border-outline px-3 py-1.5 ${barClass}`}
         >
           {title !== undefined && <h3 className="min-w-0 font-display text-xl leading-tight font-bold">{title}</h3>}
-          {actions !== undefined && <div className="flex flex-wrap items-center gap-3">{actions}</div>}
+          {actions !== undefined && <div className={`flex flex-wrap items-center gap-3 ${actionsClassName}`}>{actions}</div>}
         </div>
       )}
       <div className={bodyClassName}>{children}</div>

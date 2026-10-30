@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Build, OwnedEcho } from '../../data/schema.ts';
@@ -128,6 +128,56 @@ describe('InventoryPage', () => {
 
     expect(await screen.findByText(/no echoes yet/i)).toBeInTheDocument();
     expect(await db.ownedEchoes.count()).toBe(0);
+  });
+
+  describe('below lg (phones, tablets)', () => {
+    const original = window.matchMedia;
+    beforeEach(() => {
+      window.matchMedia = ((query: string) => ({
+        matches: query.includes('max-width: 1023.98px'),
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      })) as unknown as typeof window.matchMedia;
+    });
+    afterEach(() => {
+      window.matchMedia = original;
+    });
+
+    it('shows the picked Echo in a bottom sheet that closes, and hides it while editing', async () => {
+      const user = userEvent.setup();
+      const scrollTo = vi.spyOn(window, 'scrollTo');
+      render(<><InventoryPage /><ToastHost /></>);
+      await addEchoViaUi(user, 'Page Echo');
+
+      // Nothing picked: no Status placeholder under the list.
+      expect(screen.queryByRole('region', { name: 'Status' })).not.toBeInTheDocument();
+      const status = await selectEcho(user, 'Page Echo');
+      expect(status.parentElement).toHaveClass('fixed');
+      await user.click(within(status).getByRole('button', { name: 'Close Status' }));
+      expect(screen.queryByRole('region', { name: 'Status' })).not.toBeInTheDocument();
+
+      const again = await selectEcho(user, 'Page Echo');
+      await user.click(within(again).getByRole('button', { name: /edit/i }));
+      expect(screen.getByRole('region', { name: 'Edit an echo' })).toBeInTheDocument();
+      expect(screen.queryByRole('region', { name: 'Status' })).not.toBeInTheDocument();
+
+      // Cancel puts the page back where it was and brings the sheet back.
+      scrollTo.mockClear();
+      await user.click(screen.getByRole('button', { name: /cancel/i }));
+      await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+      expect(screen.getByRole('region', { name: 'Status' })).toBeInTheDocument();
+    });
+
+    it('closes the sheet with Escape', async () => {
+      const user = userEvent.setup();
+      render(<><InventoryPage /><ToastHost /></>);
+      await addEchoViaUi(user, 'Page Echo');
+      const status = await selectEcho(user, 'Page Echo');
+      within(status).getByRole('button', { name: /edit/i }).focus();
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('region', { name: 'Status' })).not.toBeInTheDocument();
+    });
   });
 
   it('locks an echo: Delete is disabled until unlocked, and the lock persists', async () => {

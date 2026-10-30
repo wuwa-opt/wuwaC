@@ -5,7 +5,7 @@ import { substatRoll, substatTierBlocks, rollValueBlocks } from '../../domain/ro
 import { echoDisplayName, echoScore, sonataName } from '../echoDisplay.ts';
 import { formatStatValue, statLabel } from '../format.ts';
 import { sonataTint } from '../sonataTint.ts';
-import { btnCyan, btnDangerGhost } from './classes.ts';
+import { btnCyan, btnDangerGhost, btnOutline, btnSm } from './classes.ts';
 import { AnimatedNumber } from './feedback.tsx';
 import { GameIcon } from './GameIcon.tsx';
 import { CostPips, SegmentMeter, Window } from './ui.tsx';
@@ -17,12 +17,15 @@ export function EchoStatus({
   onEdit,
   onDelete,
   onToggleLock,
+  onClose,
 }: {
   echo: OwnedEcho | null;
   snapshot: Snapshot;
   onEdit: (echo: OwnedEcho) => void;
   onDelete: (id: string) => void;
   onToggleLock: (echo: OwnedEcho) => void;
+  /** Shown as a Close button in the title bar (the phone bottom sheet). */
+  onClose?: () => void;
 }) {
   if (echo === null) {
     return (
@@ -36,7 +39,18 @@ export function EchoStatus({
   const issues = echoDefIssues(echo, snapshot.echoDefs);
   const score = echoScore(echo);
   return (
-    <Window title="Status" bar="b" label="Status">
+    <Window
+      title="Status"
+      bar="b"
+      label="Status"
+      actions={
+        onClose === undefined ? undefined : (
+          <button type="button" onClick={onClose} aria-label="Close Status" className={`${btnOutline} ${btnSm}`}>
+            Close
+          </button>
+        )
+      }
+    >
       <div key={echo.id} className="animate-tt-rise">
       <div className="flex items-center gap-3">
         <GameIcon name={name} iconUrl={def?.iconUrl} size="lg" tint={sonataTint(echo.sonataId)} />

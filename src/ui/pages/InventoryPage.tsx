@@ -22,6 +22,7 @@ import { AnimatedNumber, Skeleton } from '../components/feedback.tsx';
 import { dismissToast, INVENTORY_UNDO_SCOPE, pushToast, UNDO_TOAST_MS } from '../toasts.ts';
 import { usePrefersReducedMotion, useTypewriter } from '../motion.ts';
 import { useIncrementalCount } from '../incremental.ts';
+import { NARROW_QUERY, useMediaQuery } from '../media.ts';
 import { Alert, CostPips, EmptyState, PageHeader, Window } from '../components/ui.tsx';
 import { inventorySummary } from '../echoDisplay.ts';
 import { toDisplayValue } from '../format.ts';
@@ -111,14 +112,38 @@ export function InventoryPage() {
   // Bulk-delete confirmation: the ids shown, valid only for the filters they were shown under.
   const [fodderConfirm, setFodderConfirm] = useState<{ ids: string[]; filterKey: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const statusRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  // Where the page was when Add / Edit opened, to come back to on close.
+  const returnY = useRef<number | null>(null);
   const reducedMotion = usePrefersReducedMotion();
+  // Below lg the Status window is a bottom sheet over the list (a long
+  // inventory put it ~160 000 px below the row that was tapped).
+  const narrow = useMediaQuery(NARROW_QUERY);
 
   const snapshot = useSnapshotStore((s) => s.snapshot);
   const ensureSnapshotLoaded = useSnapshotStore((s) => s.ensureLoaded);
   const builds = useLibraryStore((s) => s.builds);
   const buildsLoaded = useLibraryStore((s) => s.loaded);
   const loadBuilds = useLibraryStore((s) => s.load);
+
+  // The Add / Edit window renders above the list: bring it into view, and
+  // put the page back where it was when it closes.
+  const editorOpen = adding || editing !== null;
+  const editingId = editing?.id ?? null;
+  useEffect(() => {
+    if (!editorOpen) return;
+    editorRef.current?.scrollIntoView?.({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
+  }, [editorOpen, editingId, reducedMotion]);
+  const openEditor = (open: () => void): void => {
+    if (!editorOpen) returnY.current = window.scrollY;
+    open();
+  };
+  const closeEditor = (close: () => void): void => {
+    close();
+    const y = returnY.current;
+    returnY.current = null;
+    if (y !== null) requestAnimationFrame(() => window.scrollTo({ top: y }));
+  };
 
   useEffect(() => {
     if (!loaded) void load();
@@ -300,6 +325,7 @@ export function InventoryPage() {
   const fodderShown = activeUsageFilter === 'fodder' ? visible.map((e) => e.id) : [];
   const confirming = fodderConfirm !== null && fodderConfirm.filterKey === filterKey ? fodderConfirm : null;
   const selected = visible.find((e) => e.id === selectedId) ?? null;
+  const sheetOpen = narrow && selected !== null && !editorOpen;
   const countByCost = new Map<number, number>();
   for (const echo of echoes) countByCost.set(echo.cost, (countByCost.get(echo.cost) ?? 0) + 1);
   const countBySonata = new Map<string, number>();
@@ -308,7 +334,8 @@ export function InventoryPage() {
   }
 
   return (
-    <section>
+    // While the sheet is up, room at the end so the last rows can scroll above it.
+    <section className={sheetOpen ? 'pb-[65dvh]' : undefined}>
       <PageHeader
         title={
           <>
@@ -351,7 +378,7 @@ export function InventoryPage() {
                   </button>
                 </>
               )}
-              <button type="button" onClick={() => setAdding(true)} className={btnPrimary}>
+              <button type="button" onClick={() => openEditor(() => setAdding(true))} className={btnPrimary}>
                 Add Echo
               </button>
               <button
@@ -470,19 +497,20 @@ export function InventoryPage() {
         </Alert>
       )}
 
+      <div ref={editorRef} className="scroll-mt-4">
       {adding && (
         <Window title="Add Echo" label="Add an echo" className="animate-tt-rise mt-6">
           <EchoForm
             submitLabel="Add Echo"
             onSubmit={async (draft) => {
               await addEcho(draft);
-              setAdding(false);
+              closeEditor(() => setAdding(false));
               pushToast('Echo added to the inventory.');
             }}
           />
           <button
             type="button"
-            onClick={() => setAdding(false)}
+            onClick={() => closeEditor(() => setAdding(false))}
             className={`${btnGhost} mt-2`}
           >
             Cancel
@@ -498,19 +526,20 @@ export function InventoryPage() {
             submitLabel="Save"
             onSubmit={async (draft) => {
               await replaceEcho(editing.id, draft);
-              setEditing(null);
+              closeEditor(() => setEditing(null));
               pushToast('Echo saved.');
             }}
           />
           <button
             type="button"
-            onClick={() => setEditing(null)}
+            onClick={() => closeEditor(() => setEditing(null))}
             className={`${btnGhost} mt-2`}
           >
             Cancel
           </button>
         </Window>
       )}
+      </div>
 
       {loaded && (
         <div className="mt-6 flex flex-col gap-6 sm:mt-8 lg:flex-row lg:items-center">
@@ -666,15 +695,7 @@ export function InventoryPage() {
               snapshot={snapshot}
               usageTags={usageTags}
               selectedId={selected?.id ?? null}
-              onSelect={(id) => {
-                setSelectedId(id);
-                // Below lg the Status window sits under the whole list — bring it into view.
-                if (typeof window !== 'undefined' && window.matchMedia?.('(max-width: 1023px)').matches) {
-                  requestAnimationFrame(() =>
-                    statusRef.current?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' }),
-                  );
-                }
-              }}
+              onSelect={setSelectedId}
             />
             {listedCount < visible.length && (
               <div ref={listEndRef} className="border-t-2 border-dashed border-line px-3 py-3 text-center">
@@ -687,11 +708,24 @@ export function InventoryPage() {
             </>
           )}
         </Window>
-        <div ref={statusRef} className="scroll-mt-4 lg:sticky lg:top-4">
+        {/* Wide: a sticky side column. Narrow: a bottom sheet while an Echo
+            is picked (not while the Add / Edit form is open), nothing otherwise. */}
+        {(!narrow || sheetOpen) && (
+        <div
+          className={
+            !narrow
+              ? 'lg:sticky lg:top-4'
+              : 'animate-tt-rise fixed inset-x-0 bottom-(--tabbar-offset) z-30 max-h-[65dvh] overflow-y-auto overscroll-contain bg-canvas/95 px-4 pt-4 pb-5 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))]'
+          }
+          onKeyDown={(e) => {
+            if (sheetOpen && e.key === 'Escape') setSelectedId(null);
+          }}
+        >
         <EchoStatus
           echo={selected}
           snapshot={snapshot}
-          onEdit={setEditing}
+          onClose={sheetOpen ? () => setSelectedId(null) : undefined}
+          onEdit={(echo) => openEditor(() => setEditing(echo))}
           onToggleLock={(echo) => {
             setLocked([echo.id], echo.locked !== true)
               .then(() => pushToast(echo.locked ? 'Echo unlocked.' : 'Echo locked.'))
@@ -707,6 +741,7 @@ export function InventoryPage() {
           }}
         />
         </div>
+        )}
       </div>
     </section>
   );

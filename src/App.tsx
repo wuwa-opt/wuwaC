@@ -139,7 +139,7 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
                 type="button"
                 onClick={() => setActiveSection(id)}
                 aria-current={active ? 'page' : undefined}
-                className={`group inline-flex min-h-10 items-center gap-2 px-2.5 py-1 font-display text-base font-semibold ${
+                className={`group inline-flex min-h-10 pointer-coarse:min-h-11 items-center gap-2 px-2.5 py-1 font-display text-base font-semibold ${
                   active
                     ? 'px-button px-button-primary animate-tt-pop'
                     : 'text-fog transition-terminal hover:bg-panel-2 hover:text-ink'

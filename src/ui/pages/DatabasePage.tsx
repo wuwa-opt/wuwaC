@@ -232,7 +232,7 @@ export function DatabasePage() {
               type="button"
               onClick={() => setSelectedId(c.id)}
               aria-current={selectedId === c.id ? 'true' : undefined}
-              className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm transition-terminal ${
+              className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm transition-terminal pointer-coarse:min-h-11 ${
                 selectedId === c.id ? 'bg-panel-2 text-accent-text' : 'text-fog hover:bg-panel-2 hover:text-ink'
               }`}
             >
@@ -254,7 +254,7 @@ export function DatabasePage() {
               type="button"
               onClick={() => setSelectedId(w.id)}
               aria-current={selectedId === w.id ? 'true' : undefined}
-              className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm transition-terminal ${
+              className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm transition-terminal pointer-coarse:min-h-11 ${
                 selectedId === w.id ? 'bg-panel-2 text-accent-text' : 'text-fog hover:bg-panel-2 hover:text-ink'
               }`}
             >
@@ -276,7 +276,7 @@ export function DatabasePage() {
               type="button"
               onClick={() => setSelectedId(e.id)}
               aria-current={selectedId === e.id ? 'true' : undefined}
-              className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm transition-terminal ${
+              className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm transition-terminal pointer-coarse:min-h-11 ${
                 selectedId === e.id ? 'bg-panel-2 text-accent-text' : 'text-fog hover:bg-panel-2 hover:text-ink'
               }`}
             >
@@ -297,7 +297,7 @@ export function DatabasePage() {
             type="button"
             onClick={() => setSelectedId(s.id)}
             aria-current={selectedId === s.id ? 'true' : undefined}
-            className={`block w-full px-2 py-1.5 text-left text-sm transition-terminal ${
+            className={`block w-full px-2 py-1.5 text-left text-sm transition-terminal pointer-coarse:min-h-11 ${
               selectedId === s.id ? 'bg-panel-2 text-accent-text' : 'text-fog hover:bg-panel-2 hover:text-ink'
             }`}
           >
@@ -387,7 +387,7 @@ export function DatabasePage() {
               role="tab"
               aria-selected={tab === t.id}
               onClick={() => switchTab(t.id)}
-              className={`-mb-px border-b-2 px-3 py-1.5 font-display text-lg font-semibold transition-terminal ${
+              className={`-mb-px border-b-2 px-3 py-1.5 font-display text-lg font-semibold transition-terminal pointer-coarse:min-h-11 ${
                 tab === t.id
                   ? 'border-seal text-ink'
                   : 'border-transparent text-fog hover:text-fog'

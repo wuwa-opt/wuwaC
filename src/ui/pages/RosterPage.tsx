@@ -251,7 +251,7 @@ export function RosterPage() {
                             ? true
                             : entry.forteUnlockedIds.includes(node.id);
                           return (
-                            <label key={node.id} className="flex items-center gap-2 text-xs text-fog">
+                            <label key={node.id} className="flex items-center gap-2 text-xs text-fog pointer-coarse:min-h-11">
                               <input
                                 type="checkbox"
                                 aria-label={`${node.title} unlocked for ${name}`}

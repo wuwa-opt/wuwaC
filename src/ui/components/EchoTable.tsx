@@ -94,7 +94,7 @@ export function EchoTable({ echoes, snapshot, selectedId, onSelect, usageTags }:
                         type="button"
                         onClick={() => onSelect(echo.id)}
                         aria-pressed={selected}
-                        className="block max-w-44 truncate py-2 max-md:max-w-60 text-left font-display text-base leading-tight font-semibold text-ink hover:text-accent-text"
+                        className="block max-w-44 truncate py-2 pointer-coarse:min-h-11 max-md:max-w-60 text-left font-display text-base leading-tight font-semibold text-ink hover:text-accent-text"
                       >
                         {name}
                       </button>

@@ -153,7 +153,7 @@ export function ToastStack({
               type="button"
               ref={focusIfStranded}
               onClick={toast.action.onAction}
-              className="shrink-0 border-2 border-line-strong px-2 py-0.5 text-xs font-bold text-accent-text hover:bg-panel-2"
+              className="shrink-0 border-2 border-line-strong px-2 py-0.5 text-xs font-bold text-accent-text hover:bg-panel-2 pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm"
             >
               {toast.action.label}
             </button>
@@ -162,7 +162,7 @@ export function ToastStack({
             type="button"
             onClick={() => onDismiss(toast.id)}
             aria-label={`Dismiss: ${toast.message}`}
-            className="shrink-0 px-1 text-xs text-fog hover:text-ink"
+            className="shrink-0 px-1 text-xs text-fog hover:text-ink pointer-coarse:min-h-11 pointer-coarse:min-w-11"
           >
             ✕
           </button>

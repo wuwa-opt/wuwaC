@@ -541,13 +541,19 @@ export function InventoryPage() {
       )}
       </div>
 
+      {/* Phones (below md): the first Echo row must show on the first screen,
+          so the cost tiles shrink to one short row, the filters sit side by
+          side, and the mascot + bubble move under the Echo Box (CSS order;
+          md and up are unchanged). At 360x740 with 700 Echoes the first row
+          moved from y 845 to 609, above the tab bar at 681 (2026-10-30). */}
+      <div className="flex flex-col">
       {loaded && (
-        <div className="mt-6 flex flex-col gap-6 sm:mt-8 lg:flex-row lg:items-center">
-          <div className="flex min-w-0 flex-1 items-center gap-4 sm:gap-6">
+        <div className="mt-6 flex flex-col gap-6 sm:mt-8 max-md:contents lg:flex-row lg:items-center">
+          <div className="flex min-w-0 flex-1 items-center gap-4 max-md:order-last max-md:mt-8 sm:gap-6">
             <Mascot />
             <SpeechBubble text={inventorySummary({ loaded, echoes, flagged: flagged.length })} />
           </div>
-          <div className="grid grid-cols-3 gap-4 sm:flex sm:flex-wrap" role="group" aria-label="Filter by cost">
+          <div className="grid grid-cols-3 gap-4 max-md:mt-5 sm:flex sm:flex-wrap" role="group" aria-label="Filter by cost">
             {([1, 3, 4] as const).map((cost) => {
               const active = costFilter === cost;
               return (
@@ -556,17 +562,20 @@ export function InventoryPage() {
                   type="button"
                   aria-pressed={active}
                   onClick={() => setCostFilter(active ? null : cost)}
-                  className={`px-card px-lift min-h-16 px-3 py-2 text-left sm:min-w-24 ${
+                  className={`px-card px-lift min-h-16 px-3 py-2 text-left max-md:flex max-md:min-h-11 max-md:items-center max-md:justify-between max-md:gap-1 max-md:px-2 max-md:py-1 sm:min-w-24 ${
                     active ? 'bg-seal-wash' : 'bg-panel hover:bg-panel-2'
                   }`}
                 >
-                  <span className="flex items-center gap-2 text-xs font-bold text-fog">
-                    <CostPips cost={cost} />
+                  <span className="flex items-center gap-2 text-xs font-bold whitespace-nowrap text-fog">
+                    {/* Decorative (the label says the cost); no room in a phone chip. */}
+                    <span className="max-md:hidden">
+                      <CostPips cost={cost} />
+                    </span>
                     {cost}-cost
                   </span>
                   <AnimatedNumber
                     value={countByCost.get(cost) ?? 0}
-                    className="block font-display text-3xl leading-none font-bold text-ink"
+                    className="block font-display text-3xl leading-none font-bold text-ink max-md:text-xl"
                   />
                 </button>
               );
@@ -575,14 +584,16 @@ export function InventoryPage() {
         </div>
       )}
 
-      <div className="mt-8 grid grid-cols-1 items-start gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <div className="mt-8 grid grid-cols-1 items-start gap-8 max-md:mt-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <Window
           title="Echo Box"
           label="Echo box"
           bodyClassName=""
+          actionsClassName="max-md:w-full"
           actions={
             loaded && echoes.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-2">
+              // Phones: two columns (label over select), filled column by column.
+              <div className="flex flex-wrap items-center gap-2 max-md:grid max-md:w-full max-md:grid-flow-col max-md:grid-cols-2 max-md:grid-rows-[auto_auto] max-md:gap-x-3 max-md:gap-y-1">
                 <label htmlFor="inventory-usage-filter" className="text-sm font-bold whitespace-nowrap">
                   Usage
                 </label>
@@ -591,7 +602,7 @@ export function InventoryPage() {
                   value={activeUsageFilter}
                   disabled={usage === null}
                   onChange={(e) => setUsageFilter(e.target.value as UsageFilter)}
-                  className={`${inputClass} w-auto text-ink`}
+                  className={`${inputClass} w-auto text-ink max-md:w-full`}
                 >
                   <option value="all">All echoes</option>
                   <option value="unused">{`Unused (${usageCounts.unused})`}</option>
@@ -604,7 +615,7 @@ export function InventoryPage() {
                   id="inventory-sonata-filter"
                   value={sonataFilter}
                   onChange={(e) => setSonataFilter(e.target.value)}
-                  className={`${inputClass} w-auto min-w-44 text-ink`}
+                  className={`${inputClass} w-auto min-w-44 text-ink max-md:w-full max-md:min-w-0`}
                 >
                   <option value="">All sets</option>
                   {snapshot.sonataSets.map((set) => (
@@ -742,6 +753,7 @@ export function InventoryPage() {
         />
         </div>
         )}
+      </div>
       </div>
     </section>
   );

@@ -123,7 +123,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                   onMouseMove={() => {
                     if (i !== highlight) setHighlight(i);
                   }}
-                  className={`flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left text-sm transition-terminal ${
+                  className={`flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left text-sm transition-terminal pointer-coarse:min-h-11 pointer-coarse:items-center ${
                     i === current ? 'bg-panel-2 text-ink' : 'text-fog'
                   }`}
                 >

@@ -398,15 +398,26 @@ select optgroup {
 /* ---- Touch devices --------------------------------------------------- */
 
 @media (pointer: coarse) {
-  /* Bigger grab targets for thumbs. */
+  /* The slider's own box was 4px tall (its hit area) under a 22px thumb:
+   * make the box 28px and draw the 4px track inside it. */
+  input[type="range"].terminal-range {
+    height: 28px;
+    background: transparent;
+  }
+  input[type="range"].terminal-range::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--color-panel-3);
+  }
   input[type="range"].terminal-range::-webkit-slider-thumb {
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
+    margin-top: -10px;
     border-radius: 0;
   }
   input[type="range"].terminal-range::-moz-range-thumb {
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
     border-radius: 0;
   }
   input[type="checkbox"],
@@ -414,16 +425,35 @@ select optgroup {
     width: 18px;
     height: 18px;
   }
+  /* Disclosure rows were 16-25px tall. */
+  details > summary {
+    min-height: 44px;
+    padding-block: 0.75rem;
+  }
 }
 
-/* iOS Safari zooms into inputs below 16px — keep everything at 16 on
- * phones so tapping a field doesn't yank the viewport. */
-@media (max-width: 640px) {
+/* iOS Safari zooms into inputs below 16px. That depends on the device, not
+ * the width (a landscape phone is 900+ px wide), so touch screens get 16px
+ * too. */
+@media (max-width: 640px), (pointer: coarse) {
   input,
   select,
   textarea {
     font-size: 16px;
   }
+}
+
+/* No double-tap-to-zoom on controls (a fast second tap on a stepper or a
+ * cost tile zoomed the page on iOS); pinch zoom stays. */
+button,
+a,
+label,
+summary,
+select,
+input,
+textarea,
+[role="button"] {
+  touch-action: manipulation;
 }
 
 /* ---- Scrollbars ---------------------------------------------------- */

@@ -51,7 +51,7 @@ export function SliderField({ id, label, value, min, max, step = 1, display, onC
             if (!Number.isFinite(num)) return;
             onChange(num);
           }}
-          className="min-h-9 w-20 shrink-0 border-2 border-line-strong bg-canvas px-2 py-1 text-xs text-ink tnum transition-terminal hover:border-fog focus:border-seal"
+          className="min-h-9 pointer-coarse:min-h-11 w-20 shrink-0 border-2 border-line-strong bg-canvas px-2 py-1 text-xs text-ink tnum transition-terminal hover:border-fog focus:border-seal"
         />
       </div>
     </div>

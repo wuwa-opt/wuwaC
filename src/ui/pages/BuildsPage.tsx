@@ -24,7 +24,7 @@ import { minStatTextsFor } from '../minStatFields.ts';
 import { SharedBuildCard } from '../components/SharedBuildCard.tsx';
 import { btnDangerGhost, btnGhost, btnOutline, btnPrimary, inputClass, labelClass } from '../components/classes.ts';
 import { Skeleton } from '../components/feedback.tsx';
-import { pushToast } from '../toasts.ts';
+import { dismissToast, LIBRARY_UNDO_SCOPE, pushToast, UNDO_TOAST_MS } from '../toasts.ts';
 import { Alert, EmptyState, PageHeader, Window } from '../components/ui.tsx';
 
 type SharedState =
@@ -38,6 +38,7 @@ export function BuildsPage() {
   const loaded = useLibraryStore((s) => s.loaded);
   const load = useLibraryStore((s) => s.load);
   const removeBuild = useLibraryStore((s) => s.removeBuild);
+  const restoreBuilds = useLibraryStore((s) => s.restoreBuilds);
   const importBuilds = useLibraryStore((s) => s.importBuilds);
   const snapshot = useSnapshotStore((s) => s.snapshot);
   const ensureSnapshotLoaded = useSnapshotStore((s) => s.ensureLoaded);
@@ -187,6 +188,36 @@ export function BuildsPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
+  };
+
+  /** Delete with an Undo that puts the same row back under its id (in memory only, like Echo deletes). */
+  const handleDelete = (build: Build): void => {
+    removeBuild(build.id)
+      .then((row) => {
+        const issuedAt = useLibraryStore.getState().generation;
+        const toastId = pushToast(`Build “${build.name}” deleted.`, 'success', {
+          timeoutMs: UNDO_TOAST_MS,
+          // Outlives this page; ToastHost drops it when a reload (backup restore) invalidates it.
+          scope: LIBRARY_UNDO_SCOPE,
+          action: {
+            label: 'Undo',
+            onAction: () => {
+              dismissToast(toastId);
+              if (useLibraryStore.getState().generation !== issuedAt) return;
+              restoreBuilds([row])
+                .then(({ skipped }) =>
+                  pushToast(
+                    skipped.length === 0
+                      ? `Restored build “${build.name}”.`
+                      : `Build “${build.name}” is already back, left as is.`,
+                  ),
+                )
+                .catch((err: unknown) => pushToast(err instanceof Error ? err.message : 'Undo failed.', 'danger'));
+            },
+          },
+        });
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Delete failed.'));
   };
 
   const handleCopyLink = async (buildId: string): Promise<void> => {
@@ -409,7 +440,7 @@ export function BuildsPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => void removeBuild(build.id).then(() => pushToast(`Build “${build.name}” deleted.`))}
+                      onClick={() => handleDelete(build)}
                       aria-label={`Delete ${build.name}`}
                       className={`${btnDangerGhost} px-2 py-1 text-xs`}
                     >

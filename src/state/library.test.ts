@@ -396,3 +396,71 @@ describe('library store: saveBuilds / removeBuilds', () => {
     expect(await useLibraryStore.getState().removeBuilds(saved.map((r) => r.id))).toEqual([]);
   });
 });
+
+describe('library store: restoreBuilds (Undo for deletes)', () => {
+  const draft = (name: string): Omit<Build, 'id' | 'updatedAt'> => ({
+    name,
+    characterId: 'jiyan',
+    weaponId: 'verdant-summit',
+    echoIds: [`${name}1`, `${name}2`, `${name}3`, `${name}4`, `${name}5`],
+    objectiveId: 'Max ATK',
+    objective: { kind: 'max-stat', stat: 'atk' },
+  });
+
+  it('removeBuild returns the row, and restoreBuilds puts it back verbatim, same id, same place', async () => {
+    const [a, b, c] = await useLibraryStore.getState().saveBuilds([draft('A'), draft('B'), draft('C')]);
+    const removed = await useLibraryStore.getState().removeBuild(b.id);
+    expect(removed).toEqual(b);
+    expect(useLibraryStore.getState().builds.map((x) => x.name)).toEqual(['A', 'C']);
+
+    const { restored, skipped } = await useLibraryStore.getState().restoreBuilds([removed]);
+    expect(restored).toEqual([b]);
+    expect(skipped).toEqual([]);
+    expect(await db.builds.get(b.id)).toEqual(b);
+    expect(useLibraryStore.getState().builds.map((x) => x.id)).toEqual([a.id, b.id, c.id]);
+  });
+
+  it('writes a row the schema would now reject unchanged (no parse, like load())', async () => {
+    const legacy = { ...(await useLibraryStore.getState().saveBuild(draft('Old'))), legacyField: 1 } as unknown as Build;
+    await db.builds.put(legacy);
+    await useLibraryStore.getState().load();
+    const [row] = await useLibraryStore.getState().removeBuilds([legacy.id]);
+    await useLibraryStore.getState().restoreBuilds([row]);
+    expect(await db.builds.get(legacy.id)).toEqual(legacy);
+  });
+
+  it('never overwrites an id that exists again, and reports it as skipped', async () => {
+    const [a, b] = await useLibraryStore.getState().saveBuilds([draft('A'), draft('B')]);
+    const removed = await useLibraryStore.getState().removeBuilds([a.id, b.id]);
+    // A backup restore in between brings A back, renamed.
+    const backA = { ...a, name: 'A from the backup' };
+    await db.builds.add(backA);
+    await useLibraryStore.getState().load();
+
+    const { restored, skipped } = await useLibraryStore.getState().restoreBuilds(removed);
+    expect(restored.map((r) => r.id)).toEqual([b.id]);
+    expect(skipped.map((r) => r.id)).toEqual([a.id]);
+    expect(await db.builds.get(a.id)).toEqual(backA);
+    expect(useLibraryStore.getState().builds.map((x) => x.name).sort()).toEqual(['A from the backup', 'B']);
+  });
+
+  it('writes nothing and leaves state untouched when the transaction fails', async () => {
+    const [a, b] = await useLibraryStore.getState().saveBuilds([draft('A'), draft('B')]);
+    const removed = await useLibraryStore.getState().removeBuilds([a.id, b.id]);
+    const original = db.builds.bulkAdd.bind(db.builds);
+    const spy = vi.spyOn(db.builds, 'bulkAdd').mockImplementation((async (items: unknown[]) => {
+      await original([items[0]] as never);
+      throw new Error('quota exceeded');
+    }) as never);
+    await expect(useLibraryStore.getState().restoreBuilds(removed)).rejects.toThrow('quota exceeded');
+    spy.mockRestore();
+    expect(await db.builds.count()).toBe(0);
+    expect(useLibraryStore.getState().builds).toEqual([]);
+  });
+
+  it('load() bumps generation', async () => {
+    const before = useLibraryStore.getState().generation;
+    await useLibraryStore.getState().load();
+    expect(useLibraryStore.getState().generation).toBe(before + 1);
+  });
+});

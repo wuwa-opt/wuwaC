@@ -9,7 +9,7 @@ import { GameIcon } from '../components/GameIcon.tsx';
 import { statLabel, toDisplayValue } from '../format.ts';
 import { btnDangerGhost, btnPrimary, inputClass, labelClass } from '../components/classes.ts';
 import { Skeleton } from '../components/feedback.tsx';
-import { dismissToast, INVENTORY_UNDO_SCOPE, pushToast, UNDO_TOAST_MS } from '../toasts.ts';
+import { dismissToast, INVENTORY_UNDO_SCOPE, LIBRARY_UNDO_SCOPE, pushToast, UNDO_TOAST_MS } from '../toasts.ts';
 import { Collapsible } from '../components/Collapsible.tsx';
 import type { MarkedEquipped } from '../components/MarkEquipped.tsx';
 import { TeamAllocation } from '../components/TeamAllocation.tsx';
@@ -52,12 +52,16 @@ export function TeamsPage() {
   /** Toast with an Undo that deletes exactly the builds just saved (in memory only). */
   const offerUndoSave = (teamName: string, rows: readonly { id: string }[]): void => {
     const ids = rows.map((r) => r.id);
+    const issuedAt = useLibraryStore.getState().generation;
     const toastId = pushToast(`Saved ${rows.length} ${rows.length === 1 ? 'build' : 'builds'} for “${teamName}”.`, 'success', {
       timeoutMs: UNDO_TOAST_MS,
+      // A backup restore may bring rows with these ids back: never delete those.
+      scope: LIBRARY_UNDO_SCOPE,
       action: {
         label: 'Undo',
         onAction: () => {
           dismissToast(toastId);
+          if (useLibraryStore.getState().generation !== issuedAt) return;
           removeBuilds(ids)
             .then((removed) => pushToast(`Removed ${removed.length} saved ${removed.length === 1 ? 'build' : 'builds'}.`))
             .catch((err: unknown) => pushToast(err instanceof Error ? err.message : 'Undo failed.', 'danger'));

@@ -160,6 +160,22 @@ describe('TeamsPage allocation', () => {
     expect(screen.queryByText(/^Marked 15 Echoes/)).not.toBeInTheDocument();
   });
 
+  it('drops the save Undo when the build library is reloaded, so it never deletes restored builds', async () => {
+    const user = userEvent.setup();
+    render(<><TeamsPage /><ToastHost /></>);
+    await user.click(await screen.findByRole('button', { name: /allocate echoes across this team/i }));
+    const run = screen.getByRole('button', { name: 'Allocate Echoes' });
+    await waitFor(() => expect(run).toBeEnabled());
+    await user.click(run);
+    await user.click(await screen.findByRole('button', { name: 'Save as 3 builds' }));
+    await screen.findByText('Saved 3 builds for “Main”.');
+
+    await act(async () => useLibraryStore.getState().load()); // e.g. a backup restore
+
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+    expect(await db.builds.count()).toBe(6);
+  });
+
   it('keeps the priority order across a reload, and resets it when the members change', async () => {
     const user = userEvent.setup();
     const names = (): (string | undefined)[] =>

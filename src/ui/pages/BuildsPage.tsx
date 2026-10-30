@@ -375,7 +375,7 @@ export function BuildsPage() {
                       </p>
                     </div>
                   </div>
-                  <div className="ml-auto flex shrink-0 flex-wrap items-center gap-1">
+                  <div className="ml-auto flex max-w-full flex-wrap items-center gap-1">
                     <label
                       className="flex items-center gap-1 px-1 text-xs text-fog"
                       title={build.objective ? 'Adds the full rotation / objective to the link (larger link)' : 'This build has no saved rotation'}
@@ -410,9 +410,10 @@ export function BuildsPage() {
                     <button
                       type="button"
                       onClick={() => void removeBuild(build.id).then(() => pushToast(`Build “${build.name}” deleted.`))}
+                      aria-label={`Delete ${build.name}`}
                       className={`${btnDangerGhost} px-2 py-1 text-xs`}
                     >
-                      Delete {build.name}
+                      Delete
                     </button>
                   </div>
                 </div>

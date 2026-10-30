@@ -31,7 +31,7 @@ npm run build       # production build (+ service worker, manifest)
 npm run preview    # serve dist/ at http://localhost:4173/wuwaC/
 npm run lint       # eslint
 npm run sync       # encore.moe -> src/data/generated/ (CLI; CI runs it weekly via sync-gamedata.yml — avoid ad-hoc full syncs, ~370 requests)
-npm run bench      # optimizer benchmark vs the brute-force oracle (manual; synthetic + realistic inventories, n = 12..300; WORKERS=k, INVENTORY=, REFERENCE_MAX=)
+npm run bench      # optimizer benchmark vs the brute-force oracle (manual; synthetic + realistic inventories, n = 12..300; WORKERS=k, INVENTORY=, REFERENCE_MAX=; OBJECTIVE=rotation = Jiyan's 11-block rotation)
 npx tsx scripts/gamedata-summary.ts <before.json> <after.json>   # Markdown change summary used in sync PRs
 ```
 
@@ -199,6 +199,29 @@ UI (React components)
     (`createProgressTracker`, `protocol.ts`) fires the search's opening
     `report(0)` once, so the page learns `total` right after setup, not
     after the first step.
+  - **Prepared scoring:** `search.ts` scores through
+    `prepareObjective(spec, ctx)` (`domain/objectives.ts`, built on
+    `domain/preparedScoring.ts`). It resolves everything that doesn't depend
+    on the sheet once per search or shard. It returns exactly (`Object.is`)
+    what `scoreSheet` returns, and defers errors to the first call, as
+    `scoreSheet` does.
+    - `scoreSheet` / `computeDamage` / `scoreRotationBlocks` stay the
+      Calculator's path and the oracle.
+    - Any change to them or their kit hooks must be mirrored in
+      `preparedScoring.ts`, in the same floating-point operation order.
+    - `preparedScoring.equivalence.test.ts` is the gate. Extend its random
+      generators when adding a kit-state field or block kind. The search
+      equivalence suite can't catch a scorer mismatch, because
+      `searchReference` scores through the same `prepare()`.
+    - Damage functions must not throw on sheet values: the prepared path
+      validates inputs once, on an empty sheet.
+    - Measured on 2026-10-30, Jiyan's 11-block rotation, 1 thread:
+      - one score call: 19 µs -> 0.8 µs;
+      - search on the bench's 4-set inventory: 3.5 s -> 0.4 s (n=200);
+      - search on a 37-set, 240-Echo inventory: 90 s -> 39 s. There the
+        search itself, not scoring, takes most of the time.
+    - Time two code versions in separate processes. Loading both trees
+      into one process distorted the measurements 2-5×.
   - **Pruning:** dominance pruning (`optimizer/prune.ts`) must never change
     the top-N result.
     - An Echo is dropped only with ≥ k + topN − 1 counted same-cost,

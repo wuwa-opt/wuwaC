@@ -25,6 +25,8 @@
  *      INVENTORY=realistic npm run bench               (synthetic | realistic | both)
  *      REFERENCE_MAX=30 npm run bench                  (oracle up to n=30 only; default 50)
  *      WORKERS=4 npm run bench                         (also time 4 shards on worker threads)
+ *      OBJECTIVE=rotation npm run bench                (synthetic/realistic: Jiyan's 11-block Prydwen
+ *                                                       rotation, rotation-dpr, instead of one Liberation hit)
  */
 import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
@@ -33,6 +35,7 @@ import { MAIN_STAT_RANGES, SECONDARY_MAIN_STAT_MAX, SUB_STAT_TIERS } from '../sr
 import { MAIN_STAT_POOLS, SUBSTAT_POOL } from '../src/data/placeholders.ts';
 import { snapshotSchema, type Snapshot } from '../src/data/schema.ts';
 import type { OwnedEcho, StatKey } from '../src/data/schema.ts';
+import { presetsForCharacter, presetToBlocks } from '../src/data/rotationPresets.ts';
 import { standardMob } from '../src/domain/damage.ts';
 import {
   mergeShardResults,
@@ -227,13 +230,22 @@ function benchCase(snapshot: Snapshot, kind: InventoryKind, n: number): { data: 
     request: {
       costBudget: 12,
       sonataLock: { mode: 'none' },
-      objective: {
-        kind: 'expected-damage',
-        skillId: liberation.id,
-        motionName: liberation.motionValues[0].name,
-        forteLevel: 10,
-        crit: 'expected',
-      },
+      objective:
+        process.env.OBJECTIVE === 'rotation'
+          ? {
+              kind: 'rotation-dpr',
+              blocks: presetToBlocks(presetsForCharacter('jiyan')[0]),
+              buffs: [],
+              globalBuffIds: [],
+              crit: 'expected',
+            }
+          : {
+              kind: 'expected-damage',
+              skillId: liberation.id,
+              motionName: liberation.motionValues[0].name,
+              forteLevel: 10,
+              crit: 'expected',
+            },
       topN: 5,
     },
   };

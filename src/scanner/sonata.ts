@@ -31,6 +31,11 @@ export type TagRead =
 
 const GRID_BAR_RE = /\bsort\s*by\b|\bbatch\s*manage\b/;
 
+/** Does this read of a `gridBarRects` strip show the grid's bottom bar ("Sort by …", "Batch Manage")? */
+export function showsGridBar(words: readonly OcrWord[]): boolean {
+  return groupRows(words).some((row) => GRID_BAR_RE.test(canonical(row.text)));
+}
+
 /**
  * Read the filter tag from the tag pass's words. A row matches when one
  * contiguous span of it is a Sonata name; the bar under the tag ("Sort by

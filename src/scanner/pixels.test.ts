@@ -38,27 +38,30 @@ describe('goldPixels', () => {
 });
 
 describe('equipLineBox', () => {
-  const rect = { left: 0, top: 0, width: 100, height: 50 }; // 5000 px -> threshold 5
+  const rect = { left: 0, top: 0, width: 250, height: 100 }; // 25 000 px -> threshold 5
 
-  it('needs gold on at least 0.1% of the strip', () => {
+  it('needs gold on at least 0.02% of the region', () => {
     const four: [number, number][] = [10, 11, 12, 13].map((x) => [x, 20]);
-    expect(equipLineBox(image(100, 50, four), rect)).toBeNull();
-    expect(equipLineBox(image(100, 50, [...four, [14, 20]]), rect)).toEqual({ x0: 10, y0: 20, x1: 15, y1: 21 });
+    expect(equipLineBox(image(250, 100, four), rect)).toBeNull();
+    expect(equipLineBox(image(250, 100, [...four, [14, 20]]), rect)).toEqual({ x0: 10, y0: 20, x1: 15, y1: 21 });
   });
 });
 
 describe('findTagBox', () => {
-  /** A crop of a 1000×500 frame: grey, with an optional near-black box. */
-  function crop(box: { x0: number; y0: number; x1: number; y1: number } | null, letters = false): RgbaImage {
-    const width = 300;
-    const height = 80;
+  /**
+   * A crop (300×80 unless given): grey, with an optional near-black box.
+   * With `letterGap`, white text strokes `letterGap` columns wide run down
+   * the box (clear of its top and bottom edges) every 2·gap + 10 columns.
+   */
+  function crop(box: { x0: number; y0: number; x1: number; y1: number } | null, letterGap = 0, width = 300, height = 80): RgbaImage {
     const data = new Uint8ClampedArray(width * height * 4);
     for (let i = 0; i < width * height; i++) data.set([90, 95, 105, 255], i * 4);
     if (box !== null) {
+      const period = 2 * letterGap + 10;
       for (let y = box.y0; y < box.y1; y++) {
         for (let x = box.x0; x < box.x1; x++) {
-          // White text strokes inside the box (every 10th column, clear of the box's edges); the letter gaps are bridged.
-          const light = letters && x % 10 === 5 && y > box.y0 + 3 && y < box.y1 - 3;
+          const at = (x - box.x0) % period;
+          const light = letterGap > 0 && at >= 10 && at < 10 + letterGap && y > box.y0 + 3 && y < box.y1 - 3;
           data.set(light ? [240, 240, 240, 255] : [18, 18, 22, 255], (y * width + x) * 4);
         }
       }
@@ -66,14 +69,29 @@ describe('findTagBox', () => {
     return { width, height, data };
   }
 
-  it('finds the dark box: rows ≥ 8% of the frame width dark, ≥ 2% of its height tall', () => {
-    // 1000×500 frame: rows need ≥ 80 dark pixels, the run ≥ 10 rows.
-    expect(findTagBox(crop({ x0: 40, y0: 20, x1: 250, y1: 45 }, true), 1000, 500)).toEqual({ x0: 40, y0: 20, x1: 250, y1: 45 });
+  it('finds the dark box: rows ≥ 8% of the 16:9 width dark, ≥ 2% of the frame height tall', () => {
+    // 1600×900 frame: rows need ≥ 128 dark pixels, the run ≥ 18 rows.
+    expect(findTagBox(crop({ x0: 40, y0: 20, x1: 250, y1: 45 }, 1), 1600, 900)).toEqual({ x0: 40, y0: 20, x1: 250, y1: 45 });
   });
 
   it('finds nothing when the dark area is too short or too narrow', () => {
-    expect(findTagBox(crop(null), 1000, 500)).toBeNull();
-    expect(findTagBox(crop({ x0: 40, y0: 20, x1: 250, y1: 28 }), 1000, 500)).toBeNull(); // 8 rows
-    expect(findTagBox(crop({ x0: 40, y0: 20, x1: 110, y1: 45 }), 1000, 500)).toBeNull(); // 70 px wide
+    expect(findTagBox(crop(null), 1600, 900)).toBeNull();
+    expect(findTagBox(crop({ x0: 40, y0: 20, x1: 250, y1: 36 }), 1600, 900)).toBeNull(); // 16 rows
+    expect(findTagBox(crop({ x0: 40, y0: 20, x1: 160, y1: 45 }), 1600, 900)).toBeNull(); // 120 px wide
+  });
+
+  it('measures width against the 16:9 width, so a wider frame needs no wider tag', () => {
+    // 2400×1080 is 1920 wide at 16:9: 153.6 dark pixels a row, not 192; the run ≥ 21.6 rows.
+    expect(findTagBox(crop({ x0: 40, y0: 20, x1: 200, y1: 45 }), 2400, 1080)).toEqual({ x0: 40, y0: 20, x1: 200, y1: 45 });
+  });
+
+  it('bridges letter gaps of up to 25 px at 1080 px tall, scaled with the frame height', () => {
+    // 280×50 box with 25-wide strokes every 60 columns; the last column (offset 279 % 60 = 39) is dark.
+    expect(findTagBox(crop({ x0: 10, y0: 20, x1: 290, y1: 70 }, 25), 1920, 1080)).toEqual({ x0: 10, y0: 20, x1: 290, y1: 70 });
+    // 26-wide gaps split it: the widest piece is one 36-column run between two strokes (offsets 36–71).
+    expect(findTagBox(crop({ x0: 10, y0: 20, x1: 290, y1: 70 }, 26), 1920, 1080)).toEqual({ x0: 46, y0: 20, x1: 82, y1: 70 });
+    // 2160 tall (4K): rows need ≥ 307.2 dark pixels, and 50-wide gaps are bridged
+    // (670×70 box, strokes every 110 columns; the last column, offset 669 % 110 = 9, is dark).
+    expect(findTagBox(crop({ x0: 10, y0: 5, x1: 680, y1: 75 }, 50, 700, 80), 3840, 2160)).toEqual({ x0: 10, y0: 5, x1: 680, y1: 75 });
   });
 });

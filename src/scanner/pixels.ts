@@ -1,4 +1,4 @@
-import type { Rect } from './layout.ts';
+import { designWidth, type Rect } from './layout.ts';
 import type { OcrBox } from './parse.ts';
 
 /**
@@ -11,10 +11,17 @@ import type { OcrBox } from './parse.ts';
  * still cross-faded over it — and a missed line used to import the Echo as
  * unequipped with no flag. Seeing gold where no line was read now raises one.
  *
- * Measured 2026-10-23 on 84 real panels (17 screenshots + 67 video frames,
- * two recordings; local `scan-fixtures/gold-measure.ts`), gold pixels in
- * the `footerRect` strip: unequipped 0 (all 27); equipped 464 (the faded
- * frame) to ~1400 (all 57), i.e. at least 5.7‰ of the strip.
+ * The check looks at a fixed part of the panel band (`equipCheckRect`),
+ * never at a rectangle placed from OCR: at 720p, pass 1 can read a tall
+ * junk word on the last stat row, and the `footerRect` strip derived from
+ * it landed under the gold line, so a missed line went unflagged (a silent
+ * error on a 2026-10-30 synthetic 20:9 720p recording).
+ *
+ * Measured 2026-10-30 on the 84 fixture panels (17 screenshots + 67 video
+ * frames, two recordings), each at its own size, scaled to 720 px tall and
+ * padded to 20:9: in `equipCheckRect`, unequipped 0 gold pixels (all 27 ×
+ * 3); equipped at least 0.98‰ of the region (all 57 × 3, the faded frame
+ * included), starting at 0.908–0.918 of the band's height.
  */
 
 export interface RgbaImage {
@@ -32,8 +39,8 @@ export function isGold(r: number, g: number, b: number): boolean {
   return r > 140 && r - b > 46 && g > 100;
 }
 
-/** Share of the footer strip that must be gold to count as an "Equipped by" line (5.7× below the faintest one measured). */
-export const EQUIPPED_GOLD_MIN_FRACTION = 0.001;
+/** Share of `equipCheckRect` that must be gold to count as an "Equipped by" line (~5× below the faintest one measured). */
+export const EQUIPPED_GOLD_MIN_FRACTION = 0.0002;
 
 export interface GoldRead {
   count: number;
@@ -67,8 +74,8 @@ export function goldPixels(image: RgbaImage, rect: Rect): GoldRead {
 }
 
 /**
- * The "Equipped by" line as seen in pixels: its box when the strip holds
- * enough gold, else null. `rect` is the footer strip (`footerRect`).
+ * The "Equipped by" line as seen in pixels: its box when `rect` holds
+ * enough gold, else null. `rect` is the check region (`equipCheckRect`).
  */
 export function equipLineBox(image: RgbaImage, rect: Rect): OcrBox | null {
   const { count, bbox } = goldPixels(image, rect);
@@ -82,16 +89,19 @@ const TAG_DARK = 40;
  * The in-game Sonata filter tag's dark box inside `image` (the
  * `filterTagRect` crop of a frame), in the crop's pixels; null when there
  * is none. The tag is a near-black box (luminance < 40) around white text,
- * ~21% of the frame wide and ~4.7% tall; the grid tiles and bar around it
- * are lighter. Rows count when ≥ 8% of the frame width is dark; the
- * tallest run of such rows (≥ 2% of the frame height) is the box, and its
- * columns are those dark in ≥ 60% of its rows, gaps of up to 25 px (the
- * letters) bridged. Ported from the measuring script that located the tag
- * on all 84 frames of the 2026-10-23 fixtures (62 with a tag, 22 without),
- * in agreement with a by-eye read of every image.
+ * ~21% of the 16:9 width (`designWidth`) wide and ~4.7% of the frame
+ * tall; the grid tiles and bar around it are lighter. Rows count when
+ * ≥ 8% of the 16:9 width is dark; the tallest run of such rows (≥ 2% of
+ * the frame height) is the box, and its columns are those dark in ≥ 60%
+ * of its rows, gaps of up to 25 px at 1080 px tall (the letters; scaled
+ * with the frame height) bridged. Ported from the measuring script that
+ * located the tag on all 84 frames of the 2026-10-23 fixtures (62 with a
+ * tag, 22 without), in agreement with a by-eye read of every image.
  */
 export function findTagBox(image: RgbaImage, frameWidth: number, frameHeight: number): OcrBox | null {
   const { width, height, data } = image;
+  const minDarkRow = 0.08 * designWidth(frameWidth, frameHeight);
+  const maxGap = Math.round((25 * frameHeight) / 1080);
   const dark = new Uint8Array(width * height);
   for (let i = 0; i < width * height; i++) {
     const p = i * 4;
@@ -102,7 +112,7 @@ export function findTagBox(image: RgbaImage, frameWidth: number, frameHeight: nu
   for (let y = 0; y <= height; y++) {
     let count = 0;
     if (y < height) for (let x = 0; x < width; x++) count += dark[y * width + x];
-    const on = y < height && count >= 0.08 * frameWidth;
+    const on = y < height && count >= minDarkRow;
     if (on && start < 0) start = y;
     if (!on && start >= 0) {
       if (y - 1 - start >= 0.02 * frameHeight && (best === null || y - 1 - start > best[1] - best[0])) best = [start, y - 1];
@@ -118,7 +128,7 @@ export function findTagBox(image: RgbaImage, frameWidth: number, frameHeight: nu
     let count = 0;
     if (x < width) for (let y = y0; y <= y1; y++) count += dark[y * width + x];
     if (x < width && count >= 0.6 * rows) {
-      span = span !== null && x - span[1] <= 26 ? [span[0], x] : [x, x];
+      span = span !== null && x - span[1] <= maxGap + 1 ? [span[0], x] : [x, x];
       if (widest === null || span[1] - span[0] > widest[1] - widest[0]) widest = span;
     }
   }

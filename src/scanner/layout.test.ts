@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterTagRect, footerRect, gridBarRect, labelColumnRect, panelRect, replaceWords, valueColumnRect } from './layout.ts';
+import { designWidth, equipCheckRect, filterTagRect, footerRect, gridBarRects, labelColumnRect, panelRect, replaceWords, valueColumnRect } from './layout.ts';
 import type { OcrWord } from './parse.ts';
 
 function w(text: string, x0: number, y0: number, x1: number, y1: number): OcrWord {
@@ -25,24 +25,62 @@ const PASS1: OcrWord[] = [
   w('Skill', 1408, 830, 1470, 852),
 ];
 
-describe('filterTagRect', () => {
-  it('covers the filter tag and the grid bar under it: x 4–36%, y 80–95%', () => {
-    expect(filterTagRect(1920, 1080)).toEqual({ left: 77, top: 864, width: 614, height: 162 });
-    // The user's 1914×1072 recording: its measured tag box [183, 886, 592, 935] sits inside.
-    expect(filterTagRect(1914, 1072)).toEqual({ left: 77, top: 858, width: 612, height: 160 });
+describe('designWidth', () => {
+  it('is the frame width up to 16:9 and 16/9 of the height beyond', () => {
+    expect(designWidth(1920, 1080)).toBe(1920);
+    expect(designWidth(1891, 1080)).toBe(1891); // a region capture a little narrower than 16:9
+    expect(designWidth(1920, 1200)).toBe(1920); // 16:10
+    expect(designWidth(2400, 1080)).toBe(1920); // a 20:9 phone
+    expect(designWidth(1914, 1072)).toBe(1906); // 1072 × 16/9 = 1905.8
   });
 });
 
-describe('gridBarRect', () => {
-  it('is the bottom of the tag area from y 88% ("Sort by Level")', () => {
-    expect(gridBarRect(1920, 1080)).toEqual({ left: 77, top: 950, width: 614, height: 76 });
+describe('filterTagRect', () => {
+  it('spans x from the left edge to the panel band, y 80–95%', () => {
+    expect(filterTagRect(1920, 1080)).toEqual({ left: 0, top: 864, width: 1267, height: 162 });
+    // The user's 1914×1072 recording: its measured tag box [183, 886, 592, 935] sits inside.
+    expect(filterTagRect(1914, 1072)).toEqual({ left: 0, top: 858, width: 1266, height: 160 });
+    expect(filterTagRect(2400, 1080)).toEqual({ left: 0, top: 864, width: 1747, height: 162 });
+  });
+});
+
+describe('gridBarRects', () => {
+  it('starts with the measured strip (x 4–36%, y 88% to the tag area\'s bottom), then steps right half a strip at a time', () => {
+    expect(gridBarRects(1920, 1080)).toEqual([
+      { left: 77, top: 950, width: 614, height: 76 },
+      { left: 384, top: 950, width: 614, height: 76 },
+      { left: 653, top: 950, width: 614, height: 76 }, // clamped to end at the band (1267)
+    ]);
+  });
+
+  it('keeps the 16:9 strip width on a wider frame and covers up to its band', () => {
+    expect(gridBarRects(2400, 1080).map((r) => r.left)).toEqual([77, 384, 691, 998, 1133]);
+    expect(gridBarRects(2400, 1080).every((r) => r.width === 614)).toBe(true);
+  });
+});
+
+describe('equipCheckRect', () => {
+  it('is the panel band from 45% of its height down', () => {
+    // panelRect(1920, 1080): y 86–950; 86 + 864 × 0.45 = 474.8 -> 475.
+    expect(equipCheckRect(panelRect(1920, 1080))).toEqual({ left: 1267, top: 475, width: 653, height: 475 });
   });
 });
 
 describe('panelRect', () => {
   it('covers the right-hand 34% band, y 8–88%', () => {
-    // 1920*0.66 = 1267.2 -> 1267; 1080*0.08 = 86.4 -> 86; 1080*0.8 = 864.
+    // 1920*0.34 = 652.8 -> 653 wide from the right edge; 1080*0.08 = 86.4 -> 86; 1080*0.8 = 864.
     expect(panelRect(1920, 1080)).toEqual({ left: 1267, top: 86, width: 653, height: 864 });
+  });
+
+  it('keeps its 16:9 size on the right edge of a wider frame', () => {
+    expect(panelRect(2400, 1080)).toEqual({ left: 1747, top: 86, width: 653, height: 864 });
+    // 1600×720: 1280 × 0.34 = 435.2 -> 435.
+    expect(panelRect(1600, 720)).toEqual({ left: 1165, top: 58, width: 435, height: 576 });
+  });
+
+  it('is 34% of the frame width when the frame is narrower than 16:9', () => {
+    // 1920×1200 (16:10): 653 wide; 1200*0.08 = 96; 1200*0.8 = 960.
+    expect(panelRect(1920, 1200)).toEqual({ left: 1267, top: 96, width: 653, height: 960 });
   });
 });
 
@@ -78,6 +116,17 @@ describe('footerRect', () => {
   it('falls back to two line-heights under the last stat row', () => {
     // Last stat row 553–575 (h 22) -> 575 + 44 = 619.
     expect(footerRect(PASS1.slice(0, -2), panel).top).toBe(619);
+  });
+
+  it('never starts below half a line above the gold "Equipped by" line', () => {
+    // The last row as pass 1 read it on a 720p frame: label lost, two junk words off the icon and art, 2–3 lines tall.
+    // Its box is the words' median: 552–596 (44 tall), so the fallback is 596 + 2 × 44 = 684, under the line.
+    const junk = [...PASS1.slice(0, 10), w('lr', 1330, 550, 1350, 600), w('1', 1500, 552, 1510, 596), w('6.3%', 1775, 553, 1848, 575)];
+    expect(footerRect(junk, panel).top).toBe(684);
+    // The gold line found in pixels at 640–660 caps it: 640 − 10 = 630.
+    expect(footerRect(junk, panel, { x0: 1300, y0: 640, x1: 1600, y1: 660 }).top).toBe(630);
+    // A gold line below the strip changes nothing.
+    expect(footerRect(PASS1, panel, { x0: 1300, y0: 870, x1: 1600, y1: 890 }).top).toBe(819);
   });
 });
 

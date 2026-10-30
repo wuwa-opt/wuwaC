@@ -1,6 +1,7 @@
-import { filterTagRect, footerRect, gridBarRect, labelColumnRect, panelRect, replaceWords, valueColumnRect, type Rect } from './layout.ts';
+import { equipCheckRect, filterTagRect, footerRect, gridBarRects, labelColumnRect, panelRect, replaceWords, valueColumnRect, type Rect } from './layout.ts';
 import { isPanelless, type OcrBox, type OcrWord, type PanelExtras, type PanelParse } from './parse.ts';
 import { equipLineBox, findTagBox, type RgbaImage } from './pixels.ts';
+import { showsGridBar } from './sonata.ts';
 
 /**
  * Scanner layer: the OCR plan for one frame (why each pass exists is
@@ -27,21 +28,21 @@ export type ParseFn = (words: readonly OcrWord[], extras?: PanelExtras) => Panel
 /** RGBA pixels of `rect` of the current frame (the tag box and the equip check); absent = neither runs. */
 export type PixelFn = (rect: Rect) => Promise<RgbaImage>;
 
-/** Passes 2–4 over a pass-1 read: value column, label column, footer. */
-async function refineWords(ocr: OcrFn, pass1: OcrWord[], panel: Rect): Promise<{ words: OcrWord[]; footer: Rect }> {
+/** Passes 2–4 over a pass-1 read: value column, label column, footer (placed with the gold line, when known). */
+async function refineWords(ocr: OcrFn, pass1: OcrWord[], panel: Rect, equip: OcrBox | null = null): Promise<OcrWord[]> {
   let words = pass1;
-  const footer = footerRect(pass1, panel);
+  const footer = footerRect(pass1, panel, equip);
   const values = valueColumnRect(pass1, panel, footer.top);
   if (values !== null) words = replaceWords(words, await ocr(values, 'digits'), values);
   const labels = values === null ? null : labelColumnRect(values, footer, panel);
   if (labels !== null) words = replaceWords(words, await ocr(labels, 'block'), labels);
-  return { words: replaceWords(words, await ocr(footer, 'block'), footer), footer };
+  return replaceWords(words, await ocr(footer, 'block'), footer);
 }
 
 /** Passes 1–4: whole panel, value column, label column, footer. */
 export async function readPanelWords(ocr: OcrFn, frameWidth: number, frameHeight: number): Promise<OcrWord[]> {
   const panel = panelRect(frameWidth, frameHeight);
-  return (await refineWords(ocr, await ocr(panel, 'sparse'), panel)).words;
+  return refineWords(ocr, await ocr(panel, 'sparse'), panel);
 }
 
 /**
@@ -49,20 +50,31 @@ export async function readPanelWords(ocr: OcrFn, frameWidth: number, frameHeight
  * one line — over the whole tag area, sparse mode split and garbled it
  * ("Pilg rimage"), while the box read as a line was exact on all 62
  * tagged fixture frames. With no box, the grid bar under it is read
- * instead, so "no filter set" can be told from "not in the picture".
+ * instead (strip by strip, `gridBarRects`), so "no filter set" can be told
+ * from "not in the picture"; with no bar in any strip, the first strip's
+ * words stand.
  */
 async function readTag(ocr: OcrFn, pixels: PixelFn, frameWidth: number, frameHeight: number): Promise<OcrWord[]> {
   const area = filterTagRect(frameWidth, frameHeight);
   const box = findTagBox(await pixels(area), frameWidth, frameHeight);
-  if (box === null) return ocr(gridBarRect(frameWidth, frameHeight), 'tag');
+  if (box === null) {
+    let first: OcrWord[] | null = null;
+    for (const strip of gridBarRects(frameWidth, frameHeight)) {
+      const words = await ocr(strip, 'tag');
+      if (showsGridBar(words)) return words;
+      first ??= words;
+    }
+    return first ?? [];
+  }
   return ocr({ left: area.left + box.x0, top: area.top + box.y0, width: box.x1 - box.x0, height: box.y1 - box.y0 }, 'tag');
 }
 
-/** The gold "Equipped by" line inside the footer strip, in frame pixels. */
-async function equipLine(pixels: PixelFn, footer: Rect): Promise<OcrBox | null> {
-  const image = await pixels(footer);
+/** The gold "Equipped by" line inside `equipCheckRect`, in frame pixels. */
+async function equipLine(pixels: PixelFn, panel: Rect): Promise<OcrBox | null> {
+  const rect = equipCheckRect(panel);
+  const image = await pixels(rect);
   const box = equipLineBox(image, { left: 0, top: 0, width: image.width, height: image.height });
-  return box === null ? null : { x0: box.x0 + footer.left, y0: box.y0 + footer.top, x1: box.x1 + footer.left, y1: box.y1 + footer.top };
+  return box === null ? null : { x0: box.x0 + rect.left, y0: box.y0 + rect.top, x1: box.x1 + rect.left, y1: box.y1 + rect.top };
 }
 
 export interface RetryTarget {
@@ -120,8 +132,8 @@ export interface PanelRead {
  *   - pass 1; a frame whose pass-1 read shows no Echo panel at all (the
  *     in-game Filter sheet: ~110 of the 2026-10-23 recording's frames)
  *     stops here, since passes 2–5 cannot turn it into a panel;
- *   - passes 2–4, then, with `pixels`, the filter-tag read (`readTag`)
- *     and the gold "Equipped by" check (pixels.ts);
+ *   - with `pixels`, the gold "Equipped by" check (pixels.ts), then
+ *     passes 2–4, then the filter-tag read (`readTag`);
  *   - parse, then — only if the parse flagged rows — re-read each flagged
  *     row (pass 5) and adopt that strip's words only if the parse's
  *     `parseCost` strictly drops, one strip at a time. A re-read only
@@ -134,12 +146,9 @@ export async function readPanel(ocr: OcrFn, frameWidth: number, frameHeight: num
   const pass1 = await ocr(panel, 'sparse');
   const first = parse(pass1);
   if (isPanelless(first)) return { words: pass1, extras: {}, parse: first };
-  const refined = await refineWords(ocr, pass1, panel);
-  let words = refined.words;
-  const extras: PanelExtras =
-    pixels === undefined
-      ? {}
-      : { tag: await readTag(ocr, pixels, frameWidth, frameHeight), equipLine: await equipLine(pixels, refined.footer) };
+  const equip = pixels === undefined ? null : await equipLine(pixels, panel);
+  let words = await refineWords(ocr, pass1, panel, equip);
+  const extras: PanelExtras = pixels === undefined ? {} : { tag: await readTag(ocr, pixels, frameWidth, frameHeight), equipLine: equip };
   let best = parse(words, extras);
   for (const target of retryTargets(best, panel)) {
     const candidate = replaceWords(words, await ocr(target.rect, target.mode), target.rect);

@@ -188,29 +188,29 @@ describe('readPanel (filter tag, equip check, panel-less frames)', () => {
     expect(read.extras).toEqual({});
   });
 
-  /** Fake pixels: a dark tag box (tag area) and/or a gold line (footer strip), background elsewhere. */
+  /** Fake pixels: a dark tag box (tag area) and/or a gold line (gold check region), background elsewhere. */
   function fakePixels(opts: { tagBox: boolean; gold: boolean }, asked: Rect[]) {
     return (rect: Rect) => {
       asked.push(rect);
       const data = new Uint8ClampedArray(rect.width * rect.height * 4);
       for (let i = 0; i < rect.width * rect.height; i++) data.set([136, 159, 175, 255], i * 4);
       if (rect.top === 864 && opts.tagBox) {
-        // 420×50 near-black box at (100, 20) of the tag area.
-        for (let y = 20; y < 70; y++) for (let x = 100; x < 520; x++) data.set([20, 20, 24, 255], (y * rect.width + x) * 4);
+        // 420×50 near-black box at (177, 20) of the tag area.
+        for (let y = 20; y < 70; y++) for (let x = 177; x < 597; x++) data.set([20, 20, 24, 255], (y * rect.width + x) * 4);
       }
-      if (rect.top === 619 && opts.gold) {
-        // 230 gold pixels (0.1% of the 653×331 strip is 216.1) in one row, 10–239 px into the strip.
-        for (let x = 10; x < 240; x++) data.set([230, 205, 150, 255], (40 * rect.width + x) * 4);
+      if (rect.top === 475 && opts.gold) {
+        // 230 gold pixels (0.02% of the 653×475 region is 62.0) in one row at y 872 (0.91 of the band), 10–239 px in.
+        for (let x = 10; x < 240; x++) data.set([230, 205, 150, 255], (397 * rect.width + x) * 4);
       }
       return Promise.resolve({ width: rect.width, height: rect.height, data });
     };
   }
-  // The footer strip: 2 lines under the last stat row (y 575 + 2×22 = 619) to the band's bottom (950).
-  const FOOTER = { left: 1267, top: 619, width: 653, height: 331 };
-  // filterTagRect(1920, 1080): x 4–36%, y 80–95%.
-  const TAG_AREA = { left: 77, top: 864, width: 614, height: 162 };
+  // equipCheckRect: the band (y 86–950) from 45% of its height (86 + 388.8 -> 475) down.
+  const GOLD_CHECK = { left: 1267, top: 475, width: 653, height: 475 };
+  // filterTagRect(1920, 1080): x from 0 to the panel band (1267), y 80–95%.
+  const TAG_AREA = { left: 0, top: 864, width: 1267, height: 162 };
 
-  it('reads the tag box found in pixels as one line, checks the footer for gold, and hands both to every parse', async () => {
+  it('reads the tag box found in pixels as one line, checks the band for gold, and hands both to every parse', async () => {
     const calls: { mode: PassMode; rect: Rect }[] = [];
     const tagWords = [w('Trailblazing', 180, 890, 340, 912), w('Star', 350, 890, 400, 912)];
     const ocr = (rect: Rect, mode: PassMode): Promise<OcrWord[]> => {
@@ -230,24 +230,42 @@ describe('readPanel (filter tag, equip check, panel-less frames)', () => {
       },
       fakePixels({ tagBox: true, gold: true }, asked),
     );
-    expect(asked).toEqual([TAG_AREA, FOOTER]);
+    expect(asked).toEqual([GOLD_CHECK, TAG_AREA]);
     // The box, in frame pixels, read as one line from a crop.
     expect(calls[4]).toEqual({ mode: 'tag', rect: { left: 177, top: 884, width: 420, height: 50 } });
-    const extras = { tag: tagWords, equipLine: { x0: 1277, y0: 659, x1: 1507, y1: 660 } };
+    const extras = { tag: tagWords, equipLine: { x0: 1277, y0: 872, x1: 1507, y1: 873 } };
     // seen[0] is the pass-1 panel check, which gets no extras.
     expect(seen).toEqual([undefined, extras]);
     expect(read.extras).toEqual(extras);
   });
 
-  it('reads the grid bar instead when no tag box is seen, and reports no gold line', async () => {
+  it('reads the grid bar strip by strip when no tag box is seen, and reports no gold line', async () => {
     const calls: { mode: PassMode; rect: Rect }[] = [];
     const ocr = (rect: Rect, mode: PassMode): Promise<OcrWord[]> => {
       calls.push({ mode, rect });
       return Promise.resolve(calls.length === 1 ? SPARSE : []);
     };
     const read = await readPanel(ocr, 1920, 1080, () => ({ echo: ECHO, flags: [] }), fakePixels({ tagBox: false, gold: false }, []));
-    // gridBarRect(1920, 1080): y 88% (950) to the tag area's bottom (1026).
-    expect(calls[4]).toEqual({ mode: 'tag', rect: { left: 77, top: 950, width: 614, height: 76 } });
+    // gridBarRects(1920, 1080): x 77–691 (4–36%), then half a strip right, the last ending at the band (1267); y 950–1026.
+    expect(calls.slice(4)).toEqual([
+      { mode: 'tag', rect: { left: 77, top: 950, width: 614, height: 76 } },
+      { mode: 'tag', rect: { left: 384, top: 950, width: 614, height: 76 } },
+      { mode: 'tag', rect: { left: 653, top: 950, width: 614, height: 76 } },
+    ]);
+    // No strip showed the bar: the first strip's words stand.
     expect(read.extras).toEqual({ tag: [], equipLine: null });
+  });
+
+  it('stops at the first grid-bar strip that shows the bar', async () => {
+    const calls: { mode: PassMode; rect: Rect }[] = [];
+    const bar = [w('Sort', 420, 975, 470, 995), w('by', 478, 975, 500, 995), w('Level', 508, 975, 570, 995)];
+    const ocr = (rect: Rect, mode: PassMode): Promise<OcrWord[]> => {
+      calls.push({ mode, rect });
+      if (calls.length === 1) return Promise.resolve(SPARSE);
+      return Promise.resolve(mode === 'tag' && rect.left === 384 ? bar : [w('IT', 100, 975, 120, 995)]);
+    };
+    const read = await readPanel(ocr, 1920, 1080, () => ({ echo: ECHO, flags: [] }), fakePixels({ tagBox: false, gold: false }, []));
+    expect(calls.slice(4).map((c) => c.rect.left)).toEqual([77, 384]);
+    expect(read.extras?.tag).toEqual(bar);
   });
 });

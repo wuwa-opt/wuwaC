@@ -60,7 +60,8 @@ export interface VideoScanResult {
   segments: number;
 }
 
-const UNPLAYABLE = "This browser can't play that video. Record as MP4 (H.264) or WebM, or use screenshots.";
+// HEVC (H.265) is one cause: an HEVC copy of a real recording failed to load in Chromium on Linux (2026-10-30).
+const UNPLAYABLE = "This browser can't play that video. If it's HEVC (H.265), save it as MP4 (H.264) or WebM, or use screenshots.";
 
 function aborted(): DOMException {
   return new DOMException('Video scan cancelled', 'AbortError');

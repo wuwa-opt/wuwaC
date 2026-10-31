@@ -134,3 +134,57 @@ export function findTagBox(image: RgbaImage, frameWidth: number, frameHeight: nu
   }
   return widest === null ? null : { x0: widest[0], y0, x1: widest[1] + 1, y1: y1 + 1 };
 }
+
+/** Luminance (BT.601, integer weights as in video.ts) from which a pixel counts as the Upgrade button's white. */
+const BUTTON_BRIGHT = 215;
+
+/**
+ * The right edge of the detail panel's "Upgrade" button inside `image`
+ * (the `upgradeSearchRect` crop of a frame), in the crop's pixels; null
+ * when no button-shaped white pill is there. The button is a near-white
+ * pill (luminance ~250) on the panel's light blue-grey (~165–185) with
+ * dark text in its middle, and its right edge is the panel's right edge.
+ * Columns count when ≥ 1.5% of the frame height is bright; runs of such
+ * columns (gaps up to 1% of the height bridged) are candidates, and the
+ * rightmost one that is 28–38% of the frame height wide, with 3–6.5% of
+ * the height of rows bright across half its width, is the button.
+ *
+ * Measured 2026-10-31: 354 px wide on the user's 2400×1080 phone
+ * recording and 1894×1062 desktop recording (0.328 / 0.333 of the
+ * height), ~50 px tall; background beside it 160–186.
+ */
+export function findUpgradeButtonRight(image: RgbaImage, frameHeight: number): number | null {
+  const { width, height, data } = image;
+  const bright = new Uint8Array(width * height);
+  for (let i = 0; i < width * height; i++) {
+    const p = i * 4;
+    bright[i] = (data[p] * 77 + data[p + 1] * 150 + data[p + 2] * 29) >> 8 >= BUTTON_BRIGHT ? 1 : 0;
+  }
+  const minColumn = 0.015 * frameHeight;
+  const maxGap = Math.round(0.01 * frameHeight);
+  const runs: [number, number][] = [];
+  let run: [number, number] | null = null;
+  for (let x = 0; x < width; x++) {
+    let count = 0;
+    for (let y = 0; y < height; y++) count += bright[y * width + x];
+    if (count < minColumn) continue;
+    if (run !== null && x - run[1] <= maxGap + 1) run[1] = x;
+    else {
+      run = [x, x];
+      runs.push(run);
+    }
+  }
+  for (let i = runs.length - 1; i >= 0; i--) {
+    const [x0, x1] = runs[i];
+    const w = x1 - x0 + 1;
+    if (w < 0.28 * frameHeight || w > 0.38 * frameHeight) continue;
+    let rows = 0;
+    for (let y = 0; y < height; y++) {
+      let count = 0;
+      for (let x = x0; x <= x1; x++) count += bright[y * width + x];
+      if (count >= 0.5 * w) rows++;
+    }
+    if (rows >= 0.03 * frameHeight && rows <= 0.065 * frameHeight) return x1 + 1;
+  }
+  return null;
+}

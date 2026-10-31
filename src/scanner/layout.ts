@@ -49,10 +49,57 @@ export function designWidth(frameWidth: number, frameHeight: number): number {
   return Math.min(frameWidth, Math.round((frameHeight * 16) / 9));
 }
 
-export function panelRect(frameWidth: number, frameHeight: number): Rect {
-  const width = Math.round(designWidth(frameWidth, frameHeight) * 0.34);
+/**
+ * A frame clearly wider than 16:9 (a phone at 18:9–20:9, an ultrawide
+ * monitor), where the game's side margins move the detail panel (see
+ * `panelRect`). Window captures a hair wider than 16:9 do not count: the
+ * user's two desktop recordings are 1894×1062 and 1914×1072 (0.3% and
+ * 0.4% wider), and their panel sits where the 16:9 band expects it.
+ */
+export function isWideFrame(frameWidth: number, frameHeight: number): boolean {
+  return frameWidth > 1.01 * ((frameHeight * 16) / 9);
+}
+
+/**
+ * Where to look for the panel's "Upgrade" button (`findUpgradeButtonRight`
+ * in pixels.ts): the right half of the 16:9 width at the right edge, y
+ * 86–97%. Measured 2026-10-31: the button spans y 0.885–0.930 of the
+ * frame on the phone recording and 0.889–0.940 on the desktop one.
+ */
+export function upgradeSearchRect(frameWidth: number, frameHeight: number): Rect {
+  const left = Math.max(0, frameWidth - Math.round(designWidth(frameWidth, frameHeight) * 0.5));
+  const top = Math.round(frameHeight * 0.86);
+  return { left, top, width: frameWidth - left, height: Math.round(frameHeight * 0.97) - top };
+}
+
+/**
+ * How far the band reaches right of the Upgrade button's right edge, as a
+ * fraction of `designWidth`. Measured 2026-10-31 on 16:9 frames, where
+ * the band ends at the frame's edge: the button ends 59 px before it on
+ * the 1894×1062 recording and 61 px on the 1920×1080 screenshots
+ * (0.031–0.032 of the width).
+ */
+const BAND_PAST_BUTTON = 0.032;
+
+/**
+ * The detail panel's band. `buttonRight` is the Upgrade button's right
+ * edge found in pixels, if any; it moves the band only on a wide frame
+ * (`isWideFrame`), where it ends `BAND_PAST_BUTTON` right of the button,
+ * as on 16:9. Other frames keep the band at the right edge whatever was
+ * found, so every measured 16:9 read stays as it was.
+ *
+ * Why (2026-10-31, the user's phone recording, 2400×1080): the game keeps
+ * ~120 px side margins there (a safe area; other phones may size it
+ * differently), so the panel ends at x 2274, 126 px before the edge
+ * (64 px on the 16:9 recordings), and a band at the right edge cut off its
+ * first 21 px, the first letter of a long name included.
+ */
+export function panelRect(frameWidth: number, frameHeight: number, buttonRight: number | null = null): Rect {
+  const unit = designWidth(frameWidth, frameHeight);
+  const width = Math.round(unit * 0.34);
   const top = Math.round(frameHeight * 0.08);
-  return { left: frameWidth - width, top, width, height: Math.round(frameHeight * 0.8) };
+  const right = buttonRight !== null && isWideFrame(frameWidth, frameHeight) ? Math.min(frameWidth, Math.max(width, Math.round(buttonRight + unit * BAND_PAST_BUTTON))) : frameWidth;
+  return { left: right - width, top, width, height: Math.round(frameHeight * 0.8) };
 }
 
 /**
@@ -70,9 +117,9 @@ export function panelRect(frameWidth: number, frameHeight: number): Rect {
  * (2026-10-30) `findTagBox` over that span returned the same box as over
  * the earlier x 0.04–0.36.
  */
-export function filterTagRect(frameWidth: number, frameHeight: number): Rect {
+export function filterTagRect(frameWidth: number, frameHeight: number, buttonRight: number | null = null): Rect {
   const top = Math.round(frameHeight * 0.8);
-  return { left: 0, top, width: panelRect(frameWidth, frameHeight).left, height: Math.round(frameHeight * 0.95) - top };
+  return { left: 0, top, width: panelRect(frameWidth, frameHeight, buttonRight).left, height: Math.round(frameHeight * 0.95) - top };
 }
 
 /**
@@ -86,8 +133,8 @@ export function filterTagRect(frameWidth: number, frameHeight: number): Rect {
  * the last ending at the panel band; the caller stops at the first that
  * shows the bar.
  */
-export function gridBarRects(frameWidth: number, frameHeight: number): Rect[] {
-  const area = filterTagRect(frameWidth, frameHeight);
+export function gridBarRects(frameWidth: number, frameHeight: number, buttonRight: number | null = null): Rect[] {
+  const area = filterTagRect(frameWidth, frameHeight, buttonRight);
   const unit = designWidth(frameWidth, frameHeight);
   const first = Math.round(unit * 0.04);
   const width = Math.round(unit * 0.36) - first;

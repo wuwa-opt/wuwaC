@@ -48,6 +48,7 @@ const TRUTH_STATS: Record<string, [StatKey, StatKey]> = {
   'Electro DMG Bonus': ['dmgBonus:Electro', 'dmgBonus:Electro'],
   'Aero DMG Bonus': ['dmgBonus:Aero', 'dmgBonus:Aero'],
   'Havoc DMG Bonus': ['dmgBonus:Havoc', 'dmgBonus:Havoc'],
+  'Spectro DMG Bonus': ['dmgBonus:Spectro', 'dmgBonus:Spectro'],
   'Basic Attack DMG Bonus': ['dmgBonus:basic', 'dmgBonus:basic'],
   'Heavy Attack DMG Bonus': ['dmgBonus:heavy', 'dmgBonus:heavy'],
   'Resonance Skill DMG Bonus': ['dmgBonus:skill', 'dmgBonus:skill'],

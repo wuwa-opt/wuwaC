@@ -256,6 +256,32 @@ describe('readPanel (filter tag, equip check, panel-less frames)', () => {
     expect(read.extras).toEqual({ tag: [], equipLine: null });
   });
 
+  it('places the band by the Upgrade button on a frame wider than 16:9, and only there', async () => {
+    // upgradeSearchRect(2400, 1080): x 1440–2400, y 929–1048. A 354 px white pill ending at 2275 (the phone recording).
+    const SEARCH = { left: 1440, top: 929, width: 960, height: 119 };
+    const asked: Rect[] = [];
+    const pixels = (rect: Rect) => {
+      asked.push(rect);
+      const data = new Uint8ClampedArray(rect.width * rect.height * 4);
+      for (let i = 0; i < rect.width * rect.height; i++) data.set([165, 175, 186, 255], i * 4);
+      if (rect.top === SEARCH.top) for (let y = 30; y < 80; y++) for (let x = 481; x < 835; x++) data.set([250, 252, 255, 255], (y * rect.width + x) * 4);
+      return Promise.resolve({ width: rect.width, height: rect.height, data });
+    };
+    const rects: Rect[] = [];
+    const ocr = (rect: Rect): Promise<OcrWord[]> => {
+      rects.push(rect);
+      return Promise.resolve(rects.length === 1 ? SPARSE : []);
+    };
+    await readPanel(ocr, 2400, 1080, () => ({ echo: ECHO, flags: [] }), pixels);
+    // panelRect(2400, 1080, 2275): x 1683–2336 instead of 1747–2400; the tag area ends there too.
+    expect(asked[0]).toEqual(SEARCH);
+    expect(rects[0]).toEqual({ left: 1683, top: 86, width: 653, height: 864 });
+    expect(asked.slice(1)).toEqual([
+      { left: 1683, top: 475, width: 653, height: 475 },
+      { left: 0, top: 864, width: 1683, height: 162 },
+    ]);
+  });
+
   it('stops at the first grid-bar strip that shows the bar', async () => {
     const calls: { mode: PassMode; rect: Rect }[] = [];
     const bar = [w('Sort', 420, 975, 470, 995), w('by', 478, 975, 500, 995), w('Level', 508, 975, 570, 995)];

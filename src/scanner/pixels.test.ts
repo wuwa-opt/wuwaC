@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { equipLineBox, findTagBox, goldPixels, isGold, type RgbaImage } from './pixels.ts';
+import { equipLineBox, findTagBox, findUpgradeButtonRight, goldPixels, isGold, type RgbaImage } from './pixels.ts';
 
 const BACKGROUND = [136, 159, 175]; // measured footer background
 const GOLD = [230, 205, 150]; // measured "Equipped by" text
@@ -93,5 +93,42 @@ describe('findTagBox', () => {
     // 2160 tall (4K): rows need ≥ 307.2 dark pixels, and 50-wide gaps are bridged
     // (670×70 box, strokes every 110 columns; the last column, offset 669 % 110 = 9, is dark).
     expect(findTagBox(crop({ x0: 10, y0: 5, x1: 680, y1: 75 }, 50, 700, 80), 3840, 2160)).toEqual({ x0: 10, y0: 5, x1: 680, y1: 75 });
+  });
+});
+
+describe('findUpgradeButtonRight', () => {
+  const PANEL = [165, 175, 186]; // measured beside the button
+  const WHITE = [250, 252, 255];
+  const TEXT = [20, 22, 26];
+
+  /** The 960×119 search strip of a 1080 px tall frame, with white pills [x0, x1) at y 30–80 and dark text in their middle. */
+  function strip(pills: [number, number, number?][]): RgbaImage {
+    const width = 960;
+    const height = 119;
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let i = 0; i < width * height; i++) data.set([...PANEL, 255], i * 4);
+    for (const [x0, x1, tall = 50] of pills) {
+      for (let y = 30; y < 30 + tall; y++) for (let x = x0; x < x1; x++) data.set([...WHITE, 255], (y * width + x) * 4);
+      // "Upgrade": a dark block 25 px tall over the middle third.
+      const third = Math.round((x1 - x0) / 3);
+      for (let y = 42; y < 67; y++) for (let x = x0 + third; x < x1 - third; x++) if (x % 9 < 6) data.set([...TEXT, 255], (y * width + x) * 4);
+    }
+    return { width, height, data };
+  }
+
+  it('finds the right edge of a 354 px pill with text in it (the phone recording: 481–835 of the strip)', () => {
+    expect(findUpgradeButtonRight(strip([[481, 835]]), 1080)).toBe(835);
+  });
+
+  it('returns null without a button-sized pill', () => {
+    expect(findUpgradeButtonRight(strip([]), 1080)).toBeNull();
+    // Too narrow (a small icon), too wide, too tall (a white art block).
+    expect(findUpgradeButtonRight(strip([[600, 700]]), 1080)).toBeNull();
+    expect(findUpgradeButtonRight(strip([[300, 800]]), 1080)).toBeNull();
+    expect(findUpgradeButtonRight(strip([[481, 835, 85]]), 1080)).toBeNull();
+  });
+
+  it('takes the rightmost button-sized pill', () => {
+    expect(findUpgradeButtonRight(strip([[20, 374], [481, 835]]), 1080)).toBe(835);
   });
 });

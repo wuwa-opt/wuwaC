@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { designWidth, equipCheckRect, filterTagRect, footerRect, gridBarRects, labelColumnRect, panelRect, replaceWords, valueColumnRect } from './layout.ts';
+import { designWidth, equipCheckRect, filterTagRect, footerRect, gridBarRects, isWideFrame, labelColumnRect, panelRect, replaceWords, upgradeSearchRect, valueColumnRect } from './layout.ts';
 import type { OcrWord } from './parse.ts';
 
 function w(text: string, x0: number, y0: number, x1: number, y1: number): OcrWord {
@@ -41,6 +41,8 @@ describe('filterTagRect', () => {
     // The user's 1914×1072 recording: its measured tag box [183, 886, 592, 935] sits inside.
     expect(filterTagRect(1914, 1072)).toEqual({ left: 0, top: 858, width: 1266, height: 160 });
     expect(filterTagRect(2400, 1080)).toEqual({ left: 0, top: 864, width: 1747, height: 162 });
+    // Up to the band placed by the Upgrade button.
+    expect(filterTagRect(2400, 1080, 2275)).toEqual({ left: 0, top: 864, width: 1683, height: 162 });
   });
 });
 
@@ -56,6 +58,8 @@ describe('gridBarRects', () => {
   it('keeps the 16:9 strip width on a wider frame and covers up to its band', () => {
     expect(gridBarRects(2400, 1080).map((r) => r.left)).toEqual([77, 384, 691, 998, 1133]);
     expect(gridBarRects(2400, 1080).every((r) => r.width === 614)).toBe(true);
+    // The last strip ends at the band placed by the Upgrade button (1683).
+    expect(gridBarRects(2400, 1080, 2275).at(-1)).toEqual({ left: 1069, top: 950, width: 614, height: 76 });
   });
 });
 
@@ -81,6 +85,43 @@ describe('panelRect', () => {
   it('is 34% of the frame width when the frame is narrower than 16:9', () => {
     // 1920×1200 (16:10): 653 wide; 1200*0.08 = 96; 1200*0.8 = 960.
     expect(panelRect(1920, 1200)).toEqual({ left: 1267, top: 96, width: 653, height: 960 });
+  });
+
+  it('ends 3.2% of the 16:9 width right of the Upgrade button on a wider frame', () => {
+    // The user's phone recording: the button ends at x 2275; 2275 + 1920 × 0.032 = 2336.4 -> 2336, 653 wide.
+    expect(panelRect(2400, 1080, 2275)).toEqual({ left: 1683, top: 86, width: 653, height: 864 });
+    // Never past the frame's edge (a button 40 px from it), never past its left edge.
+    expect(panelRect(2400, 1080, 2360)).toEqual(panelRect(2400, 1080));
+    expect(panelRect(2400, 1080, 100).left).toBe(0);
+  });
+
+  it('ignores the button unless the frame is clearly wider than 16:9', () => {
+    // 1920×1080: the button ends 60 px before the edge on every fixture; the band stays where it was measured.
+    expect(panelRect(1920, 1080, 1860)).toEqual(panelRect(1920, 1080));
+    expect(panelRect(1920, 1080, 1700)).toEqual(panelRect(1920, 1080));
+    expect(panelRect(1920, 1200, 1700)).toEqual(panelRect(1920, 1200));
+    // The user's 1914×1072 window capture (0.4% wider) and its 1286×720 copy, with a Filter-sheet fade frame's button.
+    expect(panelRect(1914, 1072, 1842)).toEqual(panelRect(1914, 1072));
+    expect(panelRect(1286, 720, 1232)).toEqual(panelRect(1286, 720));
+  });
+});
+
+describe('isWideFrame', () => {
+  it('is a frame more than 1% wider than 16:9', () => {
+    expect(isWideFrame(2400, 1080)).toBe(true); // 20:9
+    expect(isWideFrame(2160, 1080)).toBe(true); // 18:9
+    expect(isWideFrame(1920, 1080)).toBe(false);
+    expect(isWideFrame(1914, 1072)).toBe(false); // 0.4% wider
+    expect(isWideFrame(1894, 1062)).toBe(false); // 0.3% wider
+    expect(isWideFrame(1920, 1200)).toBe(false);
+  });
+});
+
+describe('upgradeSearchRect', () => {
+  it('spans half the 16:9 width at the right edge, y 86–97%', () => {
+    // 1080 × 0.86 = 928.8 -> 929; 1080 × 0.97 = 1047.6 -> 1048.
+    expect(upgradeSearchRect(1920, 1080)).toEqual({ left: 960, top: 929, width: 960, height: 119 });
+    expect(upgradeSearchRect(2400, 1080)).toEqual({ left: 1440, top: 929, width: 960, height: 119 });
   });
 });
 

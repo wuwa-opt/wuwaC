@@ -1,7 +1,7 @@
 import { createWorker, PSM, type Page, type Worker } from 'tesseract.js';
 import { panelRect } from './layout.ts';
 import type { OcrWord } from './parse.ts';
-import { readPanel, type OcrFn, type PanelRead, type ParseFn, type PixelFn } from './pipeline.ts';
+import { locateUpgradeButton, readPanel, type OcrFn, type PanelRead, type ParseFn, type PixelFn } from './pipeline.ts';
 
 /**
  * Scanner layer, browser side: binds the pure pass plan (pipeline.ts)
@@ -44,13 +44,6 @@ function pageWords(page: Page): OcrWord[] {
     .flatMap((p) => p.lines)
     .flatMap((l) => l.words)
     .map((w) => ({ text: w.text, confidence: w.confidence, bbox: w.bbox }));
-}
-
-async function frameSize(image: Blob): Promise<{ width: number; height: number }> {
-  const bitmap = await createImageBitmap(image);
-  const size = { width: bitmap.width, height: bitmap.height };
-  bitmap.close();
-  return size;
 }
 
 function bindOcr(worker: Worker, image: Blob, bitmap: ImageBitmap): OcrFn {
@@ -141,12 +134,17 @@ export async function createScanEngine(size = 2): Promise<ScanEngine> {
 
 /**
  * Small preview of the detail-panel band (the same `panelRect` pass 1
- * reads) as an object URL, for the review list. Memory only; the caller
- * revokes it.
+ * reads, placed the same way) as an object URL, for the review list.
+ * Memory only; the caller revokes it.
  */
 export async function panelThumbnail(image: Blob, height = 320): Promise<string | null> {
-  const { width: frameW, height: frameH } = await frameSize(image);
-  const r = panelRect(frameW, frameH);
+  const frame = await createImageBitmap(image);
+  let r: ReturnType<typeof panelRect>;
+  try {
+    r = panelRect(frame.width, frame.height, await locateUpgradeButton(bindPixels(frame), frame.width, frame.height));
+  } finally {
+    frame.close();
+  }
   const bitmap = await createImageBitmap(image, r.left, r.top, r.width, r.height, {
     resizeHeight: height,
     resizeQuality: 'medium',

@@ -1,6 +1,6 @@
-import { equipCheckRect, filterTagRect, footerRect, gridBarRects, labelColumnRect, panelRect, replaceWords, valueColumnRect, type Rect } from './layout.ts';
+import { equipCheckRect, filterTagRect, footerRect, gridBarRects, isWideFrame, labelColumnRect, panelRect, replaceWords, upgradeSearchRect, valueColumnRect, type Rect } from './layout.ts';
 import { isPanelless, type OcrBox, type OcrWord, type PanelExtras, type PanelParse } from './parse.ts';
-import { equipLineBox, findTagBox, type RgbaImage } from './pixels.ts';
+import { equipLineBox, findTagBox, findUpgradeButtonRight, type RgbaImage } from './pixels.ts';
 import { showsGridBar } from './sonata.ts';
 
 /**
@@ -54,12 +54,12 @@ export async function readPanelWords(ocr: OcrFn, frameWidth: number, frameHeight
  * from "not in the picture"; with no bar in any strip, the first strip's
  * words stand.
  */
-async function readTag(ocr: OcrFn, pixels: PixelFn, frameWidth: number, frameHeight: number): Promise<OcrWord[]> {
-  const area = filterTagRect(frameWidth, frameHeight);
+async function readTag(ocr: OcrFn, pixels: PixelFn, frameWidth: number, frameHeight: number, buttonRight: number | null): Promise<OcrWord[]> {
+  const area = filterTagRect(frameWidth, frameHeight, buttonRight);
   const box = findTagBox(await pixels(area), frameWidth, frameHeight);
   if (box === null) {
     let first: OcrWord[] | null = null;
-    for (const strip of gridBarRects(frameWidth, frameHeight)) {
+    for (const strip of gridBarRects(frameWidth, frameHeight, buttonRight)) {
       const words = await ocr(strip, 'tag');
       if (showsGridBar(words)) return words;
       first ??= words;
@@ -67,6 +67,18 @@ async function readTag(ocr: OcrFn, pixels: PixelFn, frameWidth: number, frameHei
     return first ?? [];
   }
   return ocr({ left: area.left + box.x0, top: area.top + box.y0, width: box.x1 - box.x0, height: box.y1 - box.y0 }, 'tag');
+}
+
+/**
+ * The Upgrade button's right edge in frame pixels (`panelRect`), looked
+ * for only on a wide frame (`isWideFrame`), the only kind it moves the
+ * band on; null when absent or not looked for.
+ */
+export async function locateUpgradeButton(pixels: PixelFn | undefined, frameWidth: number, frameHeight: number): Promise<number | null> {
+  if (pixels === undefined || !isWideFrame(frameWidth, frameHeight)) return null;
+  const rect = upgradeSearchRect(frameWidth, frameHeight);
+  const right = findUpgradeButtonRight(await pixels(rect), frameHeight);
+  return right === null ? null : rect.left + right;
 }
 
 /** The gold "Equipped by" line inside `equipCheckRect`, in frame pixels. */
@@ -129,6 +141,8 @@ export interface PanelRead {
 
 /**
  * Full read:
+ *   - on a wide frame (`isWideFrame`), with `pixels`, the band is placed by
+ *     the Upgrade button (`panelRect`);
  *   - pass 1; a frame whose pass-1 read shows no Echo panel at all (the
  *     in-game Filter sheet: ~110 of the 2026-10-23 recording's frames)
  *     stops here, since passes 2–5 cannot turn it into a panel;
@@ -142,13 +156,14 @@ export interface PanelRead {
  *     its own.
  */
 export async function readPanel(ocr: OcrFn, frameWidth: number, frameHeight: number, parse: ParseFn, pixels?: PixelFn): Promise<PanelRead> {
-  const panel = panelRect(frameWidth, frameHeight);
+  const buttonRight = await locateUpgradeButton(pixels, frameWidth, frameHeight);
+  const panel = panelRect(frameWidth, frameHeight, buttonRight);
   const pass1 = await ocr(panel, 'sparse');
   const first = parse(pass1);
   if (isPanelless(first)) return { words: pass1, extras: {}, parse: first };
   const equip = pixels === undefined ? null : await equipLine(pixels, panel);
   let words = await refineWords(ocr, pass1, panel, equip);
-  const extras: PanelExtras = pixels === undefined ? {} : { tag: await readTag(ocr, pixels, frameWidth, frameHeight), equipLine: equip };
+  const extras: PanelExtras = pixels === undefined ? {} : { tag: await readTag(ocr, pixels, frameWidth, frameHeight, buttonRight), equipLine: equip };
   let best = parse(words, extras);
   for (const target of retryTargets(best, panel)) {
     const candidate = replaceWords(words, await ocr(target.rect, target.mode), target.rect);

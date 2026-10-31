@@ -109,11 +109,17 @@ describe('createSegmenter', () => {
     expect(seg.push(0.2, frame(90)).closed).toEqual({ start: 0.1, end: 0.1, pick: 0.1, alt: null });
   });
 
-  it('offers the last sample as a second frame when it is 0.3 s or more after the pick', () => {
+  it('offers the second-to-last sample as a second frame when it is 0.3 s or more after the pick', () => {
+    const seg = createSegmenter();
+    for (const t of [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]) seg.push(t, a);
+    // Pick 0.2, second-to-last sample 0.5: 0.3 apart (within float tolerance). The last (0.6) sits next to the switch.
+    expect(seg.push(0.7, b).closed).toEqual({ start: 0, end: 0.6, pick: 0.2, alt: 0.5 });
+  });
+
+  it('offers no second frame when only the last sample is 0.3 s after the pick', () => {
     const seg = createSegmenter();
     for (const t of [0, 0.1, 0.2, 0.3, 0.4, 0.5]) seg.push(t, a);
-    // Pick 0.2, last sample 0.5: 0.3 apart (within float tolerance).
-    expect(seg.push(0.6, b).closed).toEqual({ start: 0, end: 0.5, pick: 0.2, alt: 0.5 });
+    expect(seg.push(0.6, b).closed).toEqual({ start: 0, end: 0.5, pick: 0.2, alt: null });
   });
 
   it('emits nothing for the dark Filter sheet: it closes the open panel and opens none', () => {

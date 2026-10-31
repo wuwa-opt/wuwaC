@@ -113,8 +113,13 @@ export interface Segment {
   pick: number;
   /**
    * A second frame of the same panel to re-read when the pick's read is
-   * flagged: the last sample, when at least `ALT_MIN_GAP` after the pick
-   * (the art animates, so it may uncover a name or COST); else null.
+   * flagged: the second-to-last sample, when at least `ALT_MIN_GAP` after
+   * the pick (the art animates, so it may uncover a name or COST); else
+   * null. Not the last sample: it can sit a few ms before the next
+   * panel's first frame (2026-10-31 phone recording: Skywatch Lancer's
+   * last frame is at 22.369 s, the next panel's at 22.410 s), and a
+   * re-seek there showed the next panel in a 4×-slowed browser run, whose
+   * exact read then replaced the flagged one, so the Echo was lost.
    */
   alt: number | null;
 }
@@ -165,13 +170,15 @@ export function createSegmenter(threshold = CHANGE_THRESHOLD, settle = SETTLE_SE
   let last: GrayFrame | null = null;
   let start = 0;
   let end = 0;
+  /** The sample before `end` in the open segment, if any. */
+  let beforeEnd: number | null = null;
   let pick = 0;
   let open = false;
   let settled = false;
   const close = (): Segment | null => {
     if (!open) return null;
     open = false;
-    return { start, end, pick, alt: end - pick >= ALT_MIN_GAP - 1e-6 ? end : null };
+    return { start, end, pick, alt: beforeEnd !== null && beforeEnd - pick >= ALT_MIN_GAP - 1e-6 ? beforeEnd : null };
   };
   return {
     push: (t, frame) => {
@@ -185,6 +192,9 @@ export function createSegmenter(threshold = CHANGE_THRESHOLD, settle = SETTLE_SE
         open = true;
         settled = false;
         start = t;
+        beforeEnd = null;
+      } else {
+        beforeEnd = end;
       }
       end = t;
       const capture = !settled;

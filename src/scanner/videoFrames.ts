@@ -1,4 +1,4 @@
-import { filterTagRect, isWideFrame, panelRect, upgradeSearchRect } from './layout.ts';
+import { filterTagRect, isWideFrame, panelRect, upgradeSearchRect, type Rect } from './layout.ts';
 import { findUpgradeButtonRight } from './pixels.ts';
 import {
   createSegmenter,
@@ -34,7 +34,7 @@ import {
  * The OCR frame of each panel is captured during the walk (the sample the
  * segmenter flags), so nothing is seeked twice. It keeps only the panel
  * band, the in-game filter tag (sonata.ts) and, on a wide frame, the
- * strip where the Upgrade button that places the band is; the rest of the frame is
+ * Upgrade button that places the band; the rest of the frame is
  * painted black (PNG compresses it to nothing, and nothing else on the
  * user's screen enters the scan). Nothing
  * of the recording is stored; the object URL is revoked when done.
@@ -130,10 +130,25 @@ function locateButton(ctx: CanvasRenderingContext2D, video: HTMLVideoElement, wi
 }
 
 /**
+ * Just the Upgrade button inside `upgradeSearchRect`: 0.37 of the height
+ * wide ending 1% past its right edge, y 87–95% (the button is ~0.33 × 0.05
+ * of the height at y 0.885–0.94, measured 2026-10-31). Every pass decodes
+ * the whole scan frame, and painting the full search strip slowed the
+ * walk of the phone recording by a few seconds.
+ */
+function buttonBox(width: number, height: number, button: number): Rect {
+  const search = upgradeSearchRect(width, height);
+  const left = Math.max(search.left, Math.round(button - 0.36 * height));
+  const right = Math.min(width, Math.round(button + 0.01 * height));
+  const top = Math.round(0.87 * height);
+  return { left, top, width: right - left, height: Math.round(0.95 * height) - top };
+}
+
+/**
  * Paint the frame `video` shows onto `ctx` (the frame's size) as the
  * scanner's OCR frame: black except the panel band, the filter tag and the
- * Upgrade button's search strip. The band is placed by `button` (on a wide
- * frame), and the strip is kept so the reader places it the same way
+ * Upgrade button (`buttonBox`). The band is placed by `button` (on a wide
+ * frame), and the button is kept so the reader places it the same way
  * (pipeline.ts). The walk passes the button it found once, so a capture
  * reads no pixels back: on a slowed phone, a playing video can move to
  * the next panel's frame while the capture is still drawing.
@@ -141,7 +156,7 @@ function locateButton(ctx: CanvasRenderingContext2D, video: HTMLVideoElement, wi
 function paintScanFrame(ctx: CanvasRenderingContext2D, video: HTMLVideoElement, width: number, height: number, button: number | null): void {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, width, height);
-  const strip = button === null ? [] : [upgradeSearchRect(width, height)];
+  const strip = button === null ? [] : [buttonBox(width, height, button)];
   for (const r of [panelRect(width, height, button), filterTagRect(width, height, button), ...strip]) {
     ctx.drawImage(video, r.left, r.top, r.width, r.height, r.left, r.top, r.width, r.height);
   }

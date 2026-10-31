@@ -300,6 +300,22 @@ describe('parsePanel: equip guard, Sonata and Phantom names (2026-10-23 recordin
     expect(echo.sonataId).toBe('windward-pilgrimage');
   });
 
+  it('never names an Echo from its family prefix alone ("Reminiscence: El" is not Reminiscence: Denia)', () => {
+    const stats: [string, string][] = [
+      ['Crit. DMG', '44.0%'],
+      ['ATK', '150'],
+      ['Energy Regen', '10.0%'],
+    ];
+    // The 2026-10-31 phone recording: art over "Fleurdelys" left "El". Whole-name distance 3/18 passed; 3 edits over "Denia" (5) do not.
+    const lost = parsePanel(panelWords(['Reminiscence: El', '+25', 'COST 4'], stats), { sonataId: null, rarity: 5 }, snapshot);
+    expect(lost.echo.echoDefId).toBeNull();
+    expect(lost.flags.find((f) => f.field === 'name')).toMatchObject({ severity: 'error', message: 'Echo name not recognized' });
+    // A read whose own part is mostly there still matches, for review: 2 edits over "Fleurdelys" (10).
+    const near = parsePanel(panelWords(['Reminiscence: Fleurdel', '+25', 'COST 4'], stats), { sonataId: null, rarity: 5 }, snapshot);
+    expect(near.echo.echoDefId).toBe('reminiscence-fleurdelys');
+    expect(near.flags.find((f) => f.field === 'name')).toMatchObject({ severity: 'review', message: 'name read approximately as Reminiscence: Fleurdelys' });
+  });
+
   it('reads "Phantom: X" as X exactly (a cosmetic variant, user-confirmed)', () => {
     const { echo, flags } = parsePanel(
       panelWords(

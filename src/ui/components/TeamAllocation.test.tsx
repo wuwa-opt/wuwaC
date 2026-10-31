@@ -313,7 +313,8 @@ describe('TeamAllocation', () => {
     expect([...jiyan.echoIds].sort()).toEqual(['x11', 'x12', 'x13', 'x14', 'x15']);
     expect(jiyan).toMatchObject({ weaponId: 'verdant-summit', objectiveId: 'Max ATK', notes: expect.stringContaining('greedy') });
     expect(jiyan.context?.characterId).toBe('jiyan');
-    expect(screen.getByRole('button', { name: 'Saved' })).toBeDisabled();
+    // The label re-renders after onSaved fires; on a loaded CI runner the db reads above can finish first.
+    expect(await screen.findByRole('button', { name: 'Saved' })).toBeDisabled();
     // Allocation writes builds only; nothing is equipped.
     expect((await db.ownedEchoes.toArray()).every((e) => e.equippedTo === null)).toBe(true);
     expect(useInventoryStore.getState().echoes.filter((e) => e.equippedTo !== null)).toHaveLength(5);

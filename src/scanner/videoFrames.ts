@@ -1,4 +1,5 @@
-import { filterTagRect, panelRect } from './layout.ts';
+import { filterTagRect, isWideFrame, panelRect, upgradeSearchRect } from './layout.ts';
+import { findUpgradeButtonRight } from './pixels.ts';
 import {
   createSegmenter,
   gapFillTimes,
@@ -32,7 +33,8 @@ import {
  *
  * The OCR frame of each panel is captured during the walk (the sample the
  * segmenter flags), so nothing is seeked twice. It keeps only the panel
- * band and the in-game filter tag (sonata.ts); the rest of the frame is
+ * band, the in-game filter tag (sonata.ts) and, on a wide frame, the
+ * strip where the Upgrade button that places the band is; the rest of the frame is
  * painted black (PNG compresses it to nothing, and nothing else on the
  * user's screen enters the scan). Nothing
  * of the recording is stored; the object URL is revoked when done.
@@ -115,16 +117,37 @@ function context(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
 }
 
 /**
- * Paint the frame `video` shows onto `ctx` as the scanner's OCR frame:
- * full size, black except the panel band and the filter tag.
+ * The Upgrade button's right edge in the frame `video` shows (`panelRect`),
+ * looked for only on a wide frame (`isWideFrame`); `ctx` (at least the
+ * frame's size) is scratch space.
+ */
+function locateButton(ctx: CanvasRenderingContext2D, video: HTMLVideoElement, width: number, height: number): number | null {
+  if (!isWideFrame(width, height)) return null;
+  const r = upgradeSearchRect(width, height);
+  ctx.drawImage(video, r.left, r.top, r.width, r.height, 0, 0, r.width, r.height);
+  const right = findUpgradeButtonRight({ width: r.width, height: r.height, data: ctx.getImageData(0, 0, r.width, r.height).data }, height);
+  return right === null ? null : r.left + right;
+}
+
+/**
+ * Paint the frame `video` shows onto `ctx` (the frame's size) as the
+ * scanner's OCR frame: black except the panel band, the filter tag and the
+ * Upgrade button's search strip. The band is placed by this frame's button
+ * (on a wide frame), and the strip is kept so the reader places it the
+ * same way (pipeline.ts).
  */
 function paintScanFrame(ctx: CanvasRenderingContext2D, video: HTMLVideoElement, width: number, height: number): void {
+  const button = locateButton(ctx, video, width, height);
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, width, height);
-  for (const r of [panelRect(width, height), filterTagRect(width, height)]) {
+  const strip = button === null ? [] : [upgradeSearchRect(width, height)];
+  for (const r of [panelRect(width, height, button), filterTagRect(width, height, button), ...strip]) {
     ctx.drawImage(video, r.left, r.top, r.width, r.height, r.left, r.top, r.width, r.height);
   }
 }
+
+/** Times to look for the Upgrade button before the walk: the start, then a few more if the start hides it. */
+const BUTTON_PROBES = [0, 0.25, 0.5, 0.75];
 
 function timeLabel(t: number): string {
   const m = Math.floor(t / 60);
@@ -235,7 +258,6 @@ export async function scanVideo(file: File, options: VideoScanOptions): Promise<
       throw new Error(`That recording is ${Math.round(duration / 60)} minutes long; split it into clips of at most ${MAX_VIDEO_SECONDS / 60} minutes.`);
     }
 
-    const band = panelRect(width, height);
     const small = document.createElement('canvas');
     small.width = SIGNATURE_WIDTH;
     small.height = SIGNATURE_HEIGHT;
@@ -244,6 +266,18 @@ export async function scanVideo(file: File, options: VideoScanOptions): Promise<
     pickCanvas.width = width;
     pickCanvas.height = height;
     const pickCtx = context(pickCanvas);
+    // The detector's band is fixed for the whole recording: on a wide frame
+    // it is placed by the first Upgrade button found (the game's layout
+    // does not move during a recording; a few seeks at most).
+    let button: number | null = null;
+    if (isWideFrame(width, height)) {
+      for (const at of BUTTON_PROBES) {
+        await seek(video, at * duration, signal);
+        button = locateButton(pickCtx, video, width, height);
+        if (button !== null) break;
+      }
+    }
+    const band = panelRect(width, height, button);
 
     const segmenter = createSegmenter();
     let segments = 0;

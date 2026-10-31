@@ -247,6 +247,7 @@ const LABEL_TO_STATS: Record<string, [StatKey, StatKey]> = {
   'Electro DMG Bonus': ['dmgBonus:Electro', 'dmgBonus:Electro'],
   'Aero DMG Bonus': ['dmgBonus:Aero', 'dmgBonus:Aero'],
   'Havoc DMG Bonus': ['dmgBonus:Havoc', 'dmgBonus:Havoc'],
+  'Spectro DMG Bonus': ['dmgBonus:Spectro', 'dmgBonus:Spectro'],
   'Basic Attack DMG Bonus': ['dmgBonus:basic', 'dmgBonus:basic'],
   'Heavy Attack DMG Bonus': ['dmgBonus:heavy', 'dmgBonus:heavy'],
   'Resonance Skill DMG Bonus': ['dmgBonus:skill', 'dmgBonus:skill'],
@@ -366,7 +367,7 @@ function parseFixture(name: string, p: Panel): PanelParse {
   return parsed;
 }
 
-describe('parsePanel on 84 real OCR reads (tesseract.js 7: 17 screenshots, 16 + 51 frames of two recordings)', () => {
+describe('parsePanel on 135 real OCR reads (tesseract.js 7: 17 screenshots, 16 + 51 frames of two desktop recordings, 51 frames of a phone recording)', () => {
   it.each(panels)('%s: every wrong field is flagged (zero silent errors)', (name, panel) => {
     const def = fixtureDef(panel.expected);
     const { echo, flags } = parseFixture(name, panel);
@@ -401,14 +402,28 @@ describe('parsePanel on 84 real OCR reads (tesseract.js 7: 17 screenshots, 16 + 
     expect(panels.filter(([, p]) => p.expected.filterTag !== null)).toHaveLength(62);
   });
 
-  it('reads 52 of 84 panels with no flags at all', () => {
+  it('reads 52 of the 84 desktop panels with no flags at all', () => {
     // The rest (measured 2026-10-23): 16 multi-set Echoes with no in-game
     // filter set (the 2026-10-16 screenshots, the recording's unfiltered
     // start), 14 approximate names, 3 COST misses, and one each of: a
     // missed substat row, a misread DEF value, a Rover choice — some
     // panels carry two.
-    const clean = panels.filter(([name, p]) => parseFixture(name, p).flags.length === 0);
+    const clean = panels.filter(([name, p]) => !name.startsWith('ph-') && parseFixture(name, p).flags.length === 0);
     expect(clean).toHaveLength(52);
+  });
+
+  it('reads the phone recording with no filter set: only single-set Echoes get a set, and each Rover asks', () => {
+    // 2026-10-31, 2400×1080: 38 Echoes in 51 frames, none with a filter tag
+    // ("Sort by Level" shows). 4 of the 51 frames need no review; the rest
+    // are mostly multi-set Echoes (the set must be picked) and Rover picks.
+    const phone = panels.filter(([name]) => name.startsWith('ph-'));
+    expect(phone).toHaveLength(51);
+    for (const [name, p] of phone) {
+      const { echo, flags } = parseFixture(name, p);
+      if (expectedSonata(p.expected) === null) expect([name, echo.sonataId, flags.some((f) => f.field === 'sonata')]).toEqual([name, null, true]);
+      if (p.expected.equippedBy === 'Rover') expect([name, echo.equippedTo, (echo.equippedCandidates?.length ?? 0) > 1]).toEqual([name, null, true]);
+    }
+    expect(phone.filter(([name, p]) => parseFixture(name, p).flags.length === 0)).toHaveLength(4);
   });
 
   it('reads the reference panel (Threnodian Leviathan) exactly when the set is picked', () => {

@@ -132,12 +132,13 @@ function locateButton(ctx: CanvasRenderingContext2D, video: HTMLVideoElement, wi
 /**
  * Paint the frame `video` shows onto `ctx` (the frame's size) as the
  * scanner's OCR frame: black except the panel band, the filter tag and the
- * Upgrade button's search strip. The band is placed by this frame's button
- * (on a wide frame), and the strip is kept so the reader places it the
- * same way (pipeline.ts).
+ * Upgrade button's search strip. The band is placed by `button` (on a wide
+ * frame), and the strip is kept so the reader places it the same way
+ * (pipeline.ts). The walk passes the button it found once, so a capture
+ * reads no pixels back: on a slowed phone, a playing video can move to
+ * the next panel's frame while the capture is still drawing.
  */
-function paintScanFrame(ctx: CanvasRenderingContext2D, video: HTMLVideoElement, width: number, height: number): void {
-  const button = locateButton(ctx, video, width, height);
+function paintScanFrame(ctx: CanvasRenderingContext2D, video: HTMLVideoElement, width: number, height: number, button: number | null): void {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, width, height);
   const strip = button === null ? [] : [upgradeSearchRect(width, height)];
@@ -300,7 +301,7 @@ export async function scanVideo(file: File, options: VideoScanOptions): Promise<
       const { data } = smallCtx.getImageData(0, 0, SIGNATURE_WIDTH, SIGNATURE_HEIGHT);
       const { closed, capture } = segmenter.push(t, toGray(data, SIGNATURE_WIDTH, SIGNATURE_HEIGHT));
       if (closed !== null) emit(closed);
-      if (capture) paintScanFrame(pickCtx, video, width, height);
+      if (capture) paintScanFrame(pickCtx, video, width, height, button);
       lastT = t;
       onProgress?.(t, duration);
     };
@@ -381,7 +382,8 @@ export async function openFrameGrabber(file: File): Promise<FrameGrabber> {
   const grab = (t: number): Promise<File> => {
     const job = queue.then(async () => {
       await seek(video, t);
-      paintScanFrame(ctx, video, width, height);
+      // Paused after a seek, so the button can be looked for in this very frame.
+      paintScanFrame(ctx, video, width, height, locateButton(ctx, video, width, height));
       const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
       if (png === null) throw new Error('Could not capture a frame from the video.');
       return new File([png], `${file.name} @ ${timeLabel(t)}.png`, { type: 'image/png' });

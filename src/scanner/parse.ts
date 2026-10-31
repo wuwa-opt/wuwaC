@@ -1,5 +1,5 @@
 import type { CharacterData, EchoDefData, Snapshot, StatKey } from '../data/schema.ts';
-import { canonical, matchVocab, type MatchResult, type VocabEntry } from './match.ts';
+import { canonical, foldConfusables, levenshtein, matchVocab, type MatchResult, type VocabEntry } from './match.ts';
 import { readFilterTag, resolveSonata } from './sonata.ts';
 import {
   parseNumberToken,
@@ -212,7 +212,8 @@ export const STAT_LABELS: readonly VocabEntry<StatFamily>[] = [
 /** Short labels need a tighter fuzzy bound: one wrong letter in "HP" is 50%. */
 const LABEL_MATCH = { maxDistance: 0.25, minMargin: 0.1 };
 
-type Scored<T> = { value: T; text: string; distance: number; exact: boolean };
+/** `read`: the OCR span that matched (bestSpanMatch only). */
+type Scored<T> = { value: T; text: string; distance: number; exact: boolean; read?: string };
 
 function scored<T>(m: MatchResult<T>): Scored<T> | null {
   if (m.kind === 'exact') return { value: m.value, text: m.text, distance: 0, exact: true };
@@ -241,7 +242,8 @@ function bestSpanMatch<T>(words: readonly string[], vocab: readonly VocabEntry<T
   for (let i = 0; i < words.length; i++) {
     for (let j = i + 1; j <= words.length; j++) {
       const span = words.slice(i, j);
-      consider(scored(matchVocab(span.join(' '), vocab, options)));
+      const m = scored(matchVocab(span.join(' '), vocab, options));
+      consider(m === null ? null : { ...m, read: span.join(' ') });
       for (const cut of [1, 2]) {
         const head = span[0].slice(cut);
         if (canonical(head).length < 2) continue;
@@ -316,6 +318,7 @@ export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot
   let nameIndex = -1;
   for (const [i, row] of header.entries()) {
     const m = bestSpanMatch(row.words.map((w) => w.text), nameVocab, { maxDistance: 0.2, minMargin: 0.08 });
+    if (m !== null && !m.exact && !distinctEnough(m)) continue;
     if (m !== null && (bestName === null || m.distance < bestName.distance)) {
       bestName = m;
       nameIndex = i;
@@ -508,6 +511,29 @@ export function parsePanel(words: readonly OcrWord[], batch: ScanBatch, snapshot
  */
 export function isPanelless(parse: PanelParse): boolean {
   return parse.echo.echoDefId === null && parse.echo.cost === null && parse.echo.mainStat === null;
+}
+
+/**
+ * Most edits a fuzzy name match may need per character of the name's own
+ * part, after the family prefix ("Reminiscence: ", "Nightmare: ",
+ * "Kernel Puppet: ", "Phantom: "). The prefix is shared by many names, so
+ * in a whole-name distance it can carry a read whose own part says
+ * nothing: on the 2026-10-31 phone recording "Reminiscence: El" (art
+ * over "Fleurdelys") matched "Reminiscence: Denia" (3 edits over 18
+ * characters; 3 over the 5 of "Denia"). That Echo rolls one set, so its
+ * row had no Sonata flag and outranked the correct re-read. Measured over
+ * every approximate name match in the fixture sets (as recorded, 720p,
+ * 20:9, the phone frames): the 99 right ones need at most 0.40, the wrong
+ * one 0.60.
+ */
+const MAX_EDITS_PER_OWN_CHAR = 0.5;
+
+/** Whether a fuzzy name match has enough evidence in the name's own part (names with no family prefix always do). */
+function distinctEnough(m: Scored<EchoDefData>): boolean {
+  const colon = m.text.indexOf(': ');
+  if (colon < 0 || m.read === undefined) return true;
+  const own = canonical(m.text.slice(colon + 2)).length;
+  return levenshtein(foldConfusables(canonical(m.read)), foldConfusables(canonical(m.text))) <= MAX_EDITS_PER_OWN_CHAR * own;
 }
 
 /** Minimum canonical length for a prefix read to count as evidence. */

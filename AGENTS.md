@@ -447,7 +447,10 @@ interface Team {
   beside the optimizer (UI -> scanner -> domain -> data). Pure:
   `parse.ts` (content-located fields, closed-vocab matching with I/l/1 and
   O/0 folded, nothing silently corrected — every non-exact read is
-  flagged, with the row it came from), `values.ts` (tier/range
+  flagged, with the row it came from; a fuzzy "Family: Own" name such
+  as "Reminiscence: …" also needs at most 0.5 edits per character of
+  its own part, so a shared prefix alone never names an Echo),
+  `values.ts` (tier/range
   validation), `layout.ts` + `pipeline.ts` (passes 1–4, then pass 5
   re-reads only flagged rows in single-line mode and keeps a strip only
   if `parseCost` drops — unread fields outrank flag counts), `draft.ts`,
@@ -470,14 +473,30 @@ interface Team {
     without that area uses the pick. An Echo that rolls one set needs
     neither. Rarity still comes from the batch.
   - **Frame shapes.** Fractions are of `designWidth` (the frame width up
-    to 16:9, 16/9 × height beyond). On a wider frame (phones at 20:9,
-    ultrawide) the panel band keeps its 16:9 size on the right edge. The
-    tag is searched from x 0 to the band, and the grid bar is read strip by
-    strip (`gridBarRects`). This is unverified on a real recording wider
-    than 16:9: the measurements are synthetic (`scan-fixtures/phone/`).
-    A black pillarbox still hides the tag: with no set picked, its
-    multi-set Echoes are flagged; a picked set applies, as for a region
-    capture.
+    to 16:9, 16/9 × height beyond). The panel band keeps its 16:9 size.
+    On a wide frame (`isWideFrame`: > 1% wider than 16:9; phones at
+    18:9–20:9, ultrawide) it is placed by the panel's Upgrade button,
+    found in pixels (`findUpgradeButtonRight`), with the same slack as on
+    16:9; with no button found it sits on the right edge. Other frames
+    (all 16:9 fixtures, the 0.3–0.4% wider desktop captures) never use
+    the button, so their reads are unchanged word for word.
+    - Measured on the user's phone recording (2026-10-31, 2400×1080 HEVC,
+      38 Echoes): the game keeps ~120 px side margins (a safe area), and
+      the panel ends 126 px before the edge (64 px at 16:9). The
+      right-edge band started 1 px before the Echo name; shifted 40 / 80
+      px further in, it read with 20 / 47 silent errors. Other phones may
+      size the margin differently.
+    - The video walk places its detector band once per recording (probes
+      at 0/25/50/75%), and each scan frame keeps the button's own box
+      (`buttonBox`) so the reader and the thumbnail place the band the
+      same way.
+    - The tag is searched from x 0 to the band, and the grid bar is read
+      strip by strip (`gridBarRects`).
+    - A black pillarbox still hides the tag: with no set picked, its
+      multi-set Echoes are flagged; a picked set applies, as for a region
+      capture.
+    - HEVC (most phones' recorder) does not play in Chromium on Linux;
+      the app says so. On the phone itself it was not tried.
   - **On a phone** (scanning on the device that recorded): the screen is
     kept on while a scan runs (`ui/wakeLock.ts`, Screen Wake Lock, asked
     for again when the page is visible again). The walk pauses while the
@@ -486,7 +505,10 @@ interface Team {
     32.7 s recording took 52 / 95 s with the same reads.
   - A frame whose pass 1 shows no panel stops after pass 1. A flagged
     video row re-reads its segment's `alt` frame (`openFrameGrabber`, a
-    second <video>) and keeps it only if `parseCost` drops. Same-roll rows that disagree on "Equipped by" start
+    second <video>) and keeps it only if `parseCost` drops. `alt` is the
+    second-to-last sample, never the last: a re-seek next to the switch
+    can show the next panel, whose read then replaces the flagged one
+    (an Echo lost, 2026-10-31). Same-roll rows that disagree on "Equipped by" start
     unticked. "Phantom: X" is X (cosmetic, user-confirmed).
   - **Rescan** (`sync.ts`, applied by `inventory.applyScan` in one
     transaction, Undo via `undoScan` on the Inventory page). A scanned
@@ -512,8 +534,9 @@ interface Team {
   20 MiB, 16 MP (4K = 8.3 MP, 5K = 14.7 MP), PNG/JPEG/WebP only, with the
   size read from the header. A refused file fails its own row with a
   message, and the rest of the batch is read.
-  Regression gate: `src/scanner/fixtures/panels.json` (84 panels: real OCR
-  words, tag words, gold line + hand-read truth incl. `filterTag`) must
+  Regression gate: `src/scanner/fixtures/panels.json` (135 panels: 84
+  desktop + 51 phone frames; real OCR words, tag words, gold line +
+  hand-read truth incl. `filterTag`) must
   keep ZERO silent errors, Sonata included. Real screenshots live
   only in gitignored `scan-fixtures/` (video frames in
   `scan-fixtures/video/`, `video2/`); re-measure engine changes with

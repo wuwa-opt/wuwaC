@@ -508,7 +508,9 @@ interface Team {
     second <video>) and keeps it only if `parseCost` drops. `alt` is the
     second-to-last sample, never the last: a re-seek next to the switch
     can show the next panel, whose read then replaces the flagged one
-    (an Echo lost, 2026-10-31). Same-roll rows that disagree on "Equipped by" start
+    (an Echo lost, 2026-10-31). And a re-read that names a different
+    Echo than the first read never replaces it, whatever its cost
+    (`state/scanStore.ts`); a first read with no name still can be. Same-roll rows that disagree on "Equipped by" start
     unticked. "Phantom: X" is X (cosmetic, user-confirmed).
   - **Rescan** (`sync.ts`, applied by `inventory.applyScan` in one
     transaction, Undo via `undoScan` on the Inventory page). A scanned

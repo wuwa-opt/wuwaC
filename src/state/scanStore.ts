@@ -185,7 +185,11 @@ export const useScanStore = create<ScanState>()((set, get) => {
    * OCR + parse one image. `second` (video only) gives a later frame of
    * the same panel: when the first read is flagged, that frame is read
    * too and its parse kept only if `parseCost` strictly drops — the same
-   * rule as pass 5, so it adds no trust of its own.
+   * rule as pass 5, so it adds no trust of its own — and never when both
+   * reads name an Echo and the names differ: that frame shows another
+   * panel (2026-10-31, a 4×-slowed phone run: Skywatch Lancer's re-read
+   * showed the next Echo, whose cleaner read replaced it, and the Echo was
+   * lost). A first read with no name can still be replaced.
    */
   const readOne = async (
     id: string,
@@ -217,7 +221,8 @@ export const useScanStore = create<ScanState>()((set, get) => {
         try {
           const later = await second();
           const reread = (await read(later, parseFn)).parse;
-          if (parseCost(reread) < parseCost(parse)) {
+          const otherEcho = parse.echo.echoDefId !== null && reread.echo.echoDefId !== null && reread.echo.echoDefId !== parse.echo.echoDefId;
+          if (!otherEcho && parseCost(reread) < parseCost(parse)) {
             parse = reread;
             outcome = 'second';
             setThumb(id, later);

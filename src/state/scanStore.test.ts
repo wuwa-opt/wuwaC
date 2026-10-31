@@ -300,6 +300,34 @@ describe('video scans', () => {
     expect(useScanStore.getState().items[0].parse?.flags.map((f) => f.field)).toEqual(['cost']);
   });
 
+  it('never lets a second frame that names another Echo replace the first read', async () => {
+    // The 2026-10-31 phone recording: Skywatch Lancer (ph-seg17, name read approximately) and a second
+    // frame that showed the next panel, Forbidden Bastion (ph-seg19), whose read costs less.
+    // "ph-seg19 no name" is that frame with its name line lost: a first read with no name may be replaced.
+    const nameless = (image: Blob, parse: ParseFn): Promise<FrameRead> =>
+      (image as File).name !== 'ph-seg19 no name'
+        ? fakeReader(image, parse)
+        : fakeReader(file('ph-seg19'), parse).then((read) => {
+            const words = read.words.filter((w) => w.bbox.y0 > 200);
+            return { ...read, words, parse: parse(words) };
+          });
+    setScanDeps({
+      createReader: () => Promise.resolve(nameless),
+      thumbnail: () => Promise.resolve(null),
+      scanVideo: (_video, options) => {
+        options.onFrame(file('ph-seg17'), { start: 0, end: 1, pick: 0.2, alt: 1 });
+        options.onFrame(file('ph-seg19 no name'), { start: 1.1, end: 2, pick: 1.3, alt: 2 });
+        return Promise.resolve({ duration: 2, segments: 2 });
+      },
+      openGrabber: () => Promise.resolve({ grab: () => Promise.resolve(file('ph-seg19')), close: () => undefined }),
+    });
+    await useScanStore.getState().addVideo(file('clip.mp4'));
+    const { items, lastVideo } = useScanStore.getState();
+    expect(items.map((it) => it.parse?.echo.echoDefId)).toEqual(['skywatch-lancer', 'forbidden-bastion']);
+    expect(items[0].parse?.flags.some((f) => f.message.startsWith('name read approximately'))).toBe(true);
+    expect(lastVideo).toMatchObject({ found: 2, reread: 2, improved: 1 });
+  });
+
   it('cancels between frames and keeps what was already found', async () => {
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => (release = resolve));

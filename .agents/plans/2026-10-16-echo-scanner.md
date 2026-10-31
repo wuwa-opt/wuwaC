@@ -2,7 +2,37 @@
 
 Get the user's in-game Echo inventory (738 Echoes in the 2026-10-16 screenshot) into the app without hand entry. The app reads the game's **Echo Management** detail panel (name, `+level`, Sonata icon, COST, 2 main stats, up to 5 substats, "Equipped by X") from screen pixels, OCRs it in the browser, validates every value against the game's closed vocabularies and discrete roll tables, and stages the result for review before it touches `ownedEchoes`. Multi-session project. Each phase can be verified on its own and leaves the app working.
 
-## Status (2026-10-30, latest): scanning on the phone itself
+## Status (2026-10-31, latest): the user's real phone recording
+
+- **Sample:** `~/Videos/Screenrecorder-2026-10-31-08-51-28-925.mp4`, the phone's own recorder: HEVC Main, 2400×1080 (20:9), full range (`yuvj420p`), ~24.2 fps variable, a keyframe every ~1 s, 61.3 s. Echo Management with no filter set ("Sort by Level" in every segment), clicking at ~1.5 s per Echo.
+- **Playback:** Chromium 156 on Linux loads it with a 0×0 video track, and the app shows its "can't play … HEVC" message. For browser runs, an H.264 copy (`scan-fixtures/ph/ph-h264.mp4`: libx264 CRF 10, full-range flag and colour tags kept, all 1481 timestamps and all 62 keyframe times identical). A first copy with x264's default ~10 s keyframe spacing scanned in 179 s instead of 66 s (every gap repair decoded up to 10 s). Pixels: ffmpeg's decode of the copy vs the original, MAE 0.13%; Chromium's decode of the copy vs ffmpeg's of the original, MAE 0.37%, gold "Equipped by" (232,222,168) vs (234,224,171). The detector segments the original (ffmpeg) and the copy identically.
+- **Real geometry:** the panel is the same size as on desktop (548 px wide at 1080 tall) but ends 126 px before the frame's edge (64 px at 16:9): the game keeps ~120 px side margins, and the grid has 8 columns. The old band (x 1747–2400) began on the Echo name's first pixel (1747). The Upgrade button's right edge is 125 px from the edge on all 51 phone frames and 60 px on every 16:9 frame (40 at 720p).
+- **Truth:** `ph-seg00`–`50` in `scan-fixtures/truth.json`: 51 segment frames, 38 distinct Echoes, nothing uncertain. 13 frames are one-sample transitions (the next panel's text over the previous art). Only 4 of the 38 roll a single set, so with no filter set the rest must ask for theirs; 4 are on a Rover.
+- **Changes:**
+  - On a frame > 1% wider than 16:9, the band is placed by the Upgrade button found in pixels, with the 16:9 slack (`isWideFrame`, `findUpgradeButtonRight`). Every other frame keeps the old band, word for word. The walk places its detector band once; scan frames keep the button's own box (`buttonBox`) so the reader and the thumbnail agree.
+  - A fuzzy "Family: Own" name needs ≤ 0.5 edits per character of its own part: "Reminiscence: El" (art over Fleurdelys) had matched "Reminiscence: Denia", a single-set Echo whose read then outranked the right one.
+  - A flagged video row's second frame is the segment's second-to-last sample, and a capture reads no pixels back: in 4×-slowed runs Skywatch Lancer was twice replaced by the next panel's read.
+  - The 51 phone frames joined the committed gate (135 panels).
+- **Results** (offline: `scan-spike` + `scan-eval`, fields correct / silent / panels needing no review; browser: `compare-e2e-v3.mjs`, distinct Echoes matched, every row incl. Sonata):
+
+  | Set | Before | After |
+  |---|---|---|
+  | 84 fixture panels, as recorded | 1081 / 0 / 55 | same, identical reads |
+  | 720p | 1054 / 0 / 49 | same, identical reads |
+  | 20:9 synthetic | 1085 / 0 / 53 | 1085 / 0 / 53 |
+  | phone frames (51) | 661 of 663 / 0 / 5 | 654 / 0 / 4 |
+  | phone, margin +40 px | 148 / **20** / 0 | 654 / 0 / 4 |
+  | phone, margin +80 px | 60 / **47** / 0 | 654 / 0 / 4 |
+  | browser, phone recording, desktop size | 37–38 of 38, 0 silent, 66–75 s | 38 of 38 every run, 0 silent, 72–77 s |
+  | browser, phone emulation | 37–38, 0 silent, 66–69 s | 38 every run, 0 silent, 72–80 s |
+  | browser, phone emulation, CPU 4× | 37–38, 0 silent, 173–177 s | 38 (3 runs), 0 silent, 173–176 s |
+  | browser, margin +40 px | 0 of 38 (every row flagged) | 38 |
+  | browser, recordings 1 / 2 | 15/15; 45/46, 0 silent | 15/15 all Ready; 44–46/46, 0 silent |
+
+  Before, Fleurdelys came out as "Reminiscence: Denia" (flagged) in 4 of 6 runs. Review rows went from 44–50 to 38–41 (fewer duplicate segments: 51 → 41). Unslowed, the new build is ~7 s (~10%) slower on this recording (interleaved pairs), not fully isolated: OCR per phone panel is ~4% slower on the new band, and painting the button's search strip cost a few seconds (now only its box is painted). At 4× CPU the two are equal. Details: `.agents/plans/2026-10-30-agents/reports/mobile-3.md`.
+- **Not verified:** a real phone's browser (HEVC decoding, speed, heat); a phone with other margins (only synthetic shifts); a recording with a filter tag on a phone.
+
+## Status (2026-10-30): scanning on the phone itself
 
 The user wants to upload on the phone itself and will record a phone video later.
 
